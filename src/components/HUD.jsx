@@ -23,8 +23,22 @@ const StatBar = ({ value, color = 'var(--c-accent)' }) => (
 const PROVIDER_COLORS = { anthropic: '#e58c69', openai: '#74d7a0', gemini: '#8ab4f8', ollama: '#a8dab5' };
 const PROVIDER_LABELS = { anthropic: 'CLAUDE', openai: 'GPT', gemini: 'GEMINI', ollama: 'OLLAMA' };
 
+export const FAST_MODELS = {
+  anthropic: 'claude-haiku-4-5-20251001',
+  openai:    'gpt-4o-mini',
+  gemini:    'gemini-2.0-flash',
+  ollama:    'llama3.2',
+};
+
+export const FAST_MODEL_LABELS = {
+  anthropic: 'Haiku 4',
+  openai:    'GPT-4o Mini',
+  gemini:    'Gemini Flash',
+  ollama:    'Llama 3.2 3B',
+};
+
 export default function HUD() {
-  const { settings, settingsOpen, setSettingsOpen, sidebarOpen, setSidebarOpen, streaming } = useStore();
+  const { settings, settingsOpen, setSettingsOpen, sidebarOpen, setSidebarOpen, streaming, fastMode, setFastMode, wakeWordEnabled, setWakeWordEnabled } = useStore();
   const [stats, setStats] = useState({ cpu: 0, ram: 0, ramUsed: '0', ramTotal: '0', battery: null });
   const [time, setTime] = useState(new Date());
 
@@ -80,6 +94,82 @@ export default function HUD() {
       <div className="titlebar-nodrag">
         <span className={`provider-badge provider-${provider}`}>{providerLabel}</span>
       </div>
+
+      {/* Wake word indicator */}
+      <button
+        className="titlebar-nodrag flex items-center gap-1 rounded-lg px-2 py-1 transition-all"
+        onClick={() => setWakeWordEnabled(!wakeWordEnabled)}
+        title={wakeWordEnabled ? 'Hey Zeus listening — click to disable' : 'Enable "Hey Zeus" wake word'}
+        style={{
+          border: `1px solid ${wakeWordEnabled ? 'rgba(0,255,136,0.4)' : 'var(--c-border)'}`,
+          background: wakeWordEnabled ? 'rgba(0,255,136,0.08)' : 'transparent',
+          cursor: 'pointer',
+        }}
+      >
+        <div style={{
+          width: 7, height: 7, borderRadius: '50%',
+          background: wakeWordEnabled ? '#00ff88' : 'var(--c-muted)',
+          boxShadow: wakeWordEnabled ? '0 0 6px rgba(0,255,136,0.8)' : 'none',
+          animation: wakeWordEnabled ? 'blink 1.8s ease-in-out infinite' : 'none',
+        }} />
+        <span style={{
+          fontSize: '9px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em',
+          color: wakeWordEnabled ? '#00ff88' : 'var(--c-muted)',
+        }}>MIC</span>
+      </button>
+
+      {/* Mini-HUD toggle */}
+      <button
+        className="titlebar-nodrag btn-icon w-7 h-7 rounded-lg"
+        onClick={() => window.zeus?.toggleMiniHUD()}
+        title="Toggle floating mini-HUD"
+        style={{ border: '1px solid var(--c-border)' }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="11" width="18" height="10" rx="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </button>
+
+      {/* Fast Mode toggle */}
+      <button
+        className="titlebar-nodrag flex items-center gap-1 rounded-lg px-2 py-1 transition-all"
+        onClick={() => setFastMode(!fastMode)}
+        title={fastMode
+          ? `Fast Mode ON — using ${FAST_MODEL_LABELS[provider] || 'fast model'} · Click to disable`
+          : `Fast Mode — switch to ${FAST_MODEL_LABELS[provider] || 'fast model'} for quicker replies`}
+        style={{
+          border: `1px solid ${fastMode ? 'rgba(255,213,0,0.5)' : 'var(--c-border)'}`,
+          background: fastMode ? 'rgba(255,213,0,0.1)' : 'transparent',
+          boxShadow: fastMode ? '0 0 10px rgba(255,213,0,0.2)' : 'none',
+          cursor: 'pointer',
+          transition: 'all 0.2s',
+        }}
+      >
+        <svg
+          width="12" height="12" viewBox="0 0 24 24" fill="none"
+          style={{
+            filter: fastMode ? 'drop-shadow(0 0 4px rgba(255,213,0,0.8))' : 'none',
+            transition: 'filter 0.2s',
+          }}
+        >
+          <path d="M13 2L4.5 13.5H11L10 22L20.5 10H14L13 2Z"
+            fill={fastMode ? '#ffd500' : 'var(--c-muted)'}
+            stroke={fastMode ? 'rgba(255,213,0,0.4)' : 'none'}
+            strokeWidth="0.5"
+          />
+        </svg>
+        <span style={{
+          fontSize: '9px',
+          fontFamily: 'Orbitron, sans-serif',
+          letterSpacing: '0.1em',
+          color: fastMode ? '#ffd500' : 'var(--c-muted)',
+          fontWeight: fastMode ? 700 : 400,
+          transition: 'color 0.2s',
+        }}>
+          FAST
+        </span>
+      </button>
 
       {/* Streaming indicator */}
       {streaming && (

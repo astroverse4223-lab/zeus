@@ -569,12 +569,21 @@ export default function Settings() {
                 value={local.chat?.maxTokens ?? 4096}
                 onChange={e => setChat('maxTokens', parseInt(e.target.value))}
                 style={{ fontFamily: 'JetBrains Mono, monospace', background: 'var(--c-card)' }}
+                disabled={!!local.chat?.unlimitedTokens}
               >
                 {[1024, 2048, 4096, 8192, 16384, 32768].map(n => (
                   <option key={n} value={n}>{n.toLocaleString()} tokens</option>
                 ))}
               </select>
             </div>
+
+            {/* Unlimited tokens for local models */}
+            <ToggleRow
+              label="Unlimited Tokens (Local Models)"
+              desc="Removes the token cap for Ollama — lets the model generate as long as it needs. Ignored for cloud providers."
+              value={!!local.chat?.unlimitedTokens}
+              onChange={v => setChat('unlimitedTokens', v)}
+            />
 
             {/* Max context messages */}
             <div className="rounded-xl p-4" style={cardStyle}>

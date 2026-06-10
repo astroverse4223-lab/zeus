@@ -3,11 +3,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { v4 as uuid } from 'uuid';
 import useStore from './store/useStore.js';
 import { applyTheme } from './themes.js';
-import HUD from './components/HUD.jsx';
+import HUD, { FAST_MODELS } from './components/HUD.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import Settings from './components/Settings.jsx';
-import AgentLauncher from './components/AgentLauncher.jsx';
+import useWakeWord from './hooks/useWakeWord.js';
 
 export default function App() {
   const {
@@ -18,11 +18,12 @@ export default function App() {
     newConversation,
     addMessage, updateMessage,
     streaming, setStreaming, streamingMsgId,
+    wakeWordEnabled,
   } = useStore();
 
-  const [agentOpen, setAgentOpen] = useState(false);
   const unsubRef = useRef(null);
   const streamIdRef = useRef(null);
+  const handleSendRef = useRef(null);
 
   // Load settings on mount — window.zeus only exists inside Electron
   useEffect(() => {
@@ -62,15 +63,17 @@ export default function App() {
   }, [settings?.ui]);
 
   // Send a message to the AI
-  const handleSend = useCallback(async (text) => {
+  const handleSend = useCallback(async (text, imageBase64 = null, agentMode = false) => {
     if (!text.trim() || streaming) return;
 
     const s = useStore.getState().settings;
+    const { fastMode } = useStore.getState();
     const provider = s?.activeProvider || 'anthropic';
     const providerCfg = s?.providers?.[provider] || {};
     const apiKey  = providerCfg.apiKey  || '';
-    const model   = providerCfg.model   || '';
     const baseURL = providerCfg.baseURL || '';
+    // In fast mode, override the model with the fastest option for the active provider
+    const model = fastMode ? (FAST_MODELS[provider] || providerCfg.model || '') : (providerCfg.model || '');
 
     // Ollama is local — no API key needed
     if (!apiKey && provider !== 'ollama') {
@@ -111,10 +114,25 @@ export default function App() {
     // Build history for API (trim to maxContextMessages to control cost/context)
     const conv = useStore.getState().getActive();
     const maxCtx = useStore.getState().settings?.chat?.maxContextMessages || 20;
-    const history = (conv?.messages || [])
-      .filter(m => m.id !== aiMsgId && !m.isStreaming)
-      .slice(-maxCtx)
-      .map(m => ({ role: m.role, content: m.content || '' }));
+    const allFiltered = (conv?.messages || [])
+      .filter(m => m.id !== aiMsgId && !m.isStreaming);
+
+    // If this is an agent conversation, ensure the activation message is always included
+    // even if the history window is too small to reach it — otherwise the backend loses
+    // agent mode detection and switches to wrong tools/system prompt mid-task.
+    const agentMsgIdx = allFiltered.findIndex(m =>
+      m.role === 'user' && typeof m.content === 'string' &&
+      m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
+    );
+    let history;
+    if (agentMsgIdx >= 0 && allFiltered.length - agentMsgIdx > maxCtx) {
+      const recent = allFiltered.slice(-(maxCtx - 1));
+      history = [allFiltered[agentMsgIdx], ...recent]
+        .map(m => ({ role: m.role, content: m.content || '' }));
+    } else {
+      history = allFiltered.slice(-maxCtx)
+        .map(m => ({ role: m.role, content: m.content || '' }));
+    }
 
     const streamId = uuid();
     streamIdRef.current = streamId;
@@ -139,6 +157,10 @@ export default function App() {
             .find(c => c.id === convId)?.messages
             .find(m => m.id === aiMsgId)?.content || '') + chunk.text,
         });
+      }
+
+      if (chunk.type === 'replace') {
+        updateMessage(convId, aiMsgId, { content: chunk.text });
       }
 
       if (chunk.type === 'tool_start') {
@@ -201,6 +223,8 @@ export default function App() {
         model,
         apiKey,
         baseURL,
+        imageBase64: imageBase64 || undefined,
+        agentMode: agentMode || undefined,
       });
     } catch (err) {
       updateMessage(convId, aiMsgId, {
@@ -210,6 +234,32 @@ export default function App() {
       setStreaming(false, null);
     }
   }, [streaming, addMessage, updateMessage, setStreaming]);
+
+  // Keep handleSendRef current so wake word + mini-HUD can call it
+  useEffect(() => { handleSendRef.current = handleSend; }, [handleSend]);
+
+  // Wake word — "Hey Zeus" activates voice or focuses window
+  useWakeWord({
+    enabled: wakeWordEnabled,
+    onWake: () => {
+      if (mainWindow) { /* focus is handled natively */ }
+      // Focus the textarea and show a notification
+      window.zeus?.sendMessage && document.querySelector('textarea')?.focus();
+      if (!streaming) {
+        // Flash the window to indicate wake
+        window.focus?.();
+      }
+    },
+  });
+
+  // Messages typed in the floating mini-HUD get forwarded here
+  useEffect(() => {
+    if (!window.zeus?.onMiniMessage) return;
+    const unsub = window.zeus.onMiniMessage((text) => {
+      handleSendRef.current?.(text);
+    });
+    return unsub;
+  }, []);
 
   const handleStop = useCallback(() => {
     if (streamIdRef.current) {
@@ -225,14 +275,10 @@ export default function App() {
   }, [setStreaming]);
 
   const handleAgentLaunch = useCallback((agentPrompt) => {
-    setAgentOpen(false);
-    const state = useStore.getState();
-    const hasMessages = (state.getActive()?.messages?.length || 0) > 0;
-    // Only start a fresh conversation when there isn't already one in progress
-    if (!state.activeId || !hasMessages) {
-      state.newConversation();
-    }
-    setTimeout(() => handleSend(agentPrompt), 50);
+    // Always start a fresh conversation — mixing agent tasks with old chat history
+    // confuses the model and breaks agent-mode detection.
+    useStore.getState().newConversation();
+    setTimeout(() => handleSend(agentPrompt, null, true), 50);
   }, [handleSend]);
 
   return (
@@ -250,13 +296,13 @@ export default function App() {
               transition={{ duration: 0.2, ease: 'easeInOut' }}
               className="overflow-hidden flex-shrink-0"
             >
-              <Sidebar onOpenAgent={() => setAgentOpen(true)} />
+              <Sidebar />
             </motion.div>
           )}
         </AnimatePresence>
 
         <div className="flex-1 flex flex-col overflow-hidden relative">
-          <ChatWindow onSend={handleSend} onStop={handleStop} onOpenAgent={() => setAgentOpen(true)} onAgent={handleAgentLaunch} />
+          <ChatWindow onSend={handleSend} onStop={handleStop} onAgent={handleAgentLaunch} />
         </div>
       </div>
 
@@ -275,15 +321,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {agentOpen && (
-          <AgentLauncher
-            key="agent-launcher"
-            onLaunch={handleAgentLaunch}
-            onClose={() => setAgentOpen(false)}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }

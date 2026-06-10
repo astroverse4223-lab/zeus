@@ -14,24 +14,13 @@ const LANGUAGES = [
 ];
 
 function buildAgentPrompt(task, directory, language) {
-  const langLine = language !== 'auto' ? `\nPrimary Language/Framework: ${language}` : '';
+  const langLine = language !== 'auto' ? `\nLanguage/Framework: ${language}` : '';
   return `[ZEUS CODING AGENT — ACTIVATED]
 
 Task: ${task}
 Working Directory: ${directory}${langLine}
 
-Agent Protocol:
-1. Start with get_directory_tree on the working directory to map the project
-2. Read key files (package.json, main entry points, configs) to understand patterns
-3. Plan your approach before making any changes
-4. Implement incrementally:
-   - write_file for new files
-   - patch_file for targeted edits to existing files (preferred over rewriting)
-   - run_command to install dependencies and verify/test changes
-5. Fix errors immediately when they occur
-6. Report a clear summary when complete: what was built, what files were created/changed
-
-Begin now — start with the directory tree.`;
+The working directory snapshot is attached. Call write_file for the first file RIGHT NOW — no text output, no plans, no descriptions. Text does not save files. Only write_file tool calls save files. Write every file completely, then call task_complete.`;
 }
 
 export default function AgentLauncher({ onLaunch, onClose }) {

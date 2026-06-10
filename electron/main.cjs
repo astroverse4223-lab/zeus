@@ -9,7 +9,9 @@ const fs = require('fs');
 const os = require('os');
 const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
-const execAsync = promisify(exec);
+const _execBase = promisify(exec);
+// Always hide the console window on Windows so no CMD popup appears
+const execAsync = (cmd, opts = {}) => _execBase(cmd, { windowsHide: true, ...opts });
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -120,6 +122,27 @@ function formatMemoryForPrompt() {
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 let mainWindow;
+let miniHUDWindow = null;
+
+function createMiniHUD() {
+  if (miniHUDWindow && !miniHUDWindow.isDestroyed()) {
+    miniHUDWindow.show();
+    miniHUDWindow.focus();
+    return;
+  }
+  miniHUDWindow = new BrowserWindow({
+    width: 392, height: 64,
+    frame: false, transparent: true, alwaysOnTop: true,
+    resizable: false, skipTaskbar: true, hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'mini-preload.cjs'),
+      contextIsolation: true, nodeIntegration: false,
+    },
+  });
+  miniHUDWindow.loadFile(path.join(__dirname, 'mini-hud.html'));
+  miniHUDWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  miniHUDWindow.on('closed', () => { miniHUDWindow = null; });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -213,6 +236,46 @@ ipcMain.handle('zeus:settings-set', (_, updates) => {
 
 ipcMain.handle('zeus:open-external', (_, url) => shell.openExternal(url));
 
+// ─── Screen Capture ───────────────────────────────────────────────────────────
+
+ipcMain.handle('zeus:capture-screen', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1280, height: 720 },
+    });
+    if (!sources.length) return null;
+    return sources[0].thumbnail.toDataURL();
+  } catch { return null; }
+});
+
+// ─── Mini-HUD ─────────────────────────────────────────────────────────────────
+
+ipcMain.handle('zeus:toggle-mini-hud', () => {
+  if (!miniHUDWindow || miniHUDWindow.isDestroyed()) {
+    createMiniHUD();
+  } else {
+    miniHUDWindow.close();
+  }
+});
+
+ipcMain.on('mini:focus-main', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
+ipcMain.on('mini:hide', () => {
+  miniHUDWindow?.hide();
+});
+
+ipcMain.on('mini:send', (_, text) => {
+  // Forward message from mini-HUD as if typed in main window
+  mainWindow?.webContents?.send('zeus:mini-message', text);
+});
+
 // ─── Directory Picker ─────────────────────────────────────────────────────────
 
 ipcMain.handle('zeus:pick-directory', async () => {
@@ -252,9 +315,25 @@ function ollamaRequest(method, path, body) {
   });
 }
 
+// Find ollama binary — packaged Electron may not inherit the user's PATH on Windows
+function getOllamaExe() {
+  if (process.platform !== 'win32') return 'ollama';
+  const candidates = [
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe'),
+    path.join(process.env.USERPROFILE || '', 'AppData', 'Local', 'Programs', 'Ollama', 'ollama.exe'),
+    'C:\\Program Files\\Ollama\\ollama.exe',
+  ];
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch {}
+  }
+  return 'ollama'; // last-resort PATH fallback
+}
+
 ipcMain.handle('zeus:ollama-status', async () => {
-  const { exec } = require('child_process');
-  const isInstalled = await new Promise(resolve => exec('where ollama', err => resolve(!err)));
+  const ollamaExe = getOllamaExe();
+  const isInstalled = await new Promise(resolve => {
+    exec(`"${ollamaExe}" --version`, { windowsHide: true }, err => resolve(!err));
+  });
   try {
     const res = await ollamaRequest('GET', '/api/version');
     return { running: true, installed: true, version: res.version || 'unknown' };
@@ -284,46 +363,61 @@ ipcMain.handle('zeus:ollama-delete', async (_, name) => {
 const activePulls = new Map();
 
 ipcMain.on('zeus:ollama-pull', (event, name) => {
-  const http = require('http');
   const sender = event.sender;
-  const payload = JSON.stringify({ name, stream: true });
 
-  const req = http.request({
-    hostname: 'localhost', port: 11434, path: '/api/pull', method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-  }, (res) => {
-    let buf = '';
-    res.on('data', chunk => {
-      buf += chunk.toString();
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const obj = JSON.parse(line);
-          sender.send('zeus:ollama-progress', { name, ...obj });
-        } catch {}
+  function emit(payload) {
+    if (!sender.isDestroyed()) sender.send('zeus:ollama-progress', { name, ...payload });
+  }
+
+  emit({ status: 'connecting' });
+
+  const ollamaExe = getOllamaExe();
+  const child = spawn(ollamaExe, ['pull', name], {
+    shell: false,         // no CMD window
+    windowsHide: true,    // suppress any console popup on Windows
+  });
+  activePulls.set(name, child);
+
+  let buf = '';
+  function parseBuf(data) {
+    // ollama CLI uses \r to overwrite lines; split on both \n and \r
+    buf += data.toString();
+    const parts = buf.split(/[\r\n]/);
+    buf = parts.pop(); // keep incomplete line
+    for (const line of parts) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // Extract percentage if present: "pulling abc123... 42% ▕...▏ 1.6 GB/3.8 GB"
+      const pctMatch = trimmed.match(/(\d+)%/);
+      if (pctMatch) {
+        emit({ status: 'downloading', completed: parseInt(pctMatch[1], 10), total: 100 });
+      } else {
+        emit({ status: trimmed.toLowerCase().slice(0, 40), completed: 0, total: 0 });
       }
-    });
-    res.on('end', () => {
-      activePulls.delete(name);
-      if (!sender.isDestroyed()) sender.send('zeus:ollama-progress', { name, status: 'done' });
-    });
-  });
+    }
+  }
 
-  req.on('error', err => {
+  child.stdout.on('data', parseBuf);
+  child.stderr.on('data', parseBuf);
+
+  child.on('close', code => {
     activePulls.delete(name);
-    if (!sender.isDestroyed()) sender.send('zeus:ollama-progress', { name, status: 'error', error: err.message });
+    if (code === 0) {
+      emit({ status: 'done' });
+    } else {
+      emit({ status: 'error', error: `ollama pull exited with code ${code}` });
+    }
   });
 
-  req.write(payload);
-  req.end();
-  activePulls.set(name, req);
+  child.on('error', err => {
+    activePulls.delete(name);
+    emit({ status: 'error', error: err.message });
+  });
 });
 
 ipcMain.on('zeus:ollama-pull-cancel', (_, name) => {
-  const req = activePulls.get(name);
-  if (req) { req.destroy(); activePulls.delete(name); }
+  const child = activePulls.get(name);
+  if (child) { child.kill(); activePulls.delete(name); }
 });
 
 // ─── System Stats ─────────────────────────────────────────────────────────────
@@ -386,14 +480,15 @@ ipcMain.handle('zeus:terminal-exec', async (_, { command }) => {
 
   return new Promise(resolve => {
     let proc;
+    const spawnOpts = { cwd: terminalCwd, windowsHide: true };
     if (shell === 'powershell') {
-      proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', probeCommand], { cwd: terminalCwd });
+      proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', probeCommand], spawnOpts);
     } else if (shell === 'cmd') {
-      proc = spawn('cmd', ['/c', probeCommand], { cwd: terminalCwd });
+      proc = spawn('cmd', ['/c', probeCommand], spawnOpts);
     } else if (shell === 'wsl') {
-      proc = spawn('wsl', ['-e', 'bash', '-c', probeCommand], { cwd: terminalCwd });
+      proc = spawn('wsl', ['-e', 'bash', '-c', probeCommand], spawnOpts);
     } else {
-      proc = spawn('bash', ['-c', probeCommand], { cwd: terminalCwd });
+      proc = spawn('bash', ['-c', probeCommand], spawnOpts);
     }
 
     let stdout = '', stderr = '';
@@ -753,9 +848,32 @@ const TOOLS = [
     schema: { type: 'object', properties: {} },
     dangerous: false,
   },
+  {
+    name: 'task_complete',
+    description: 'Call this ONLY when you have fully finished the assigned coding task — all files have been created with write_file, dependencies installed, and the project is ready. This ends the agent session.',
+    schema: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'What was built: list every file created/modified and what each does',
+        },
+      },
+      required: ['summary'],
+    },
+    dangerous: false,
+  },
 ];
 
 const TOOL_MAP = Object.fromEntries(TOOLS.map(t => [t.name, t]));
+
+// In agent mode, only expose coding-relevant tools so the model can't waste turns
+// calling memory_recall or get_system_info to satisfy tool_choice.
+const AGENT_TOOL_NAMES = new Set([
+  'write_file', 'read_file', 'run_command', 'get_directory_tree',
+  'patch_file', 'find_files', 'search_in_files', 'create_directory', 'task_complete',
+]);
+const AGENT_TOOLS = TOOLS.filter(t => AGENT_TOOL_NAMES.has(t.name));
 
 function buildToolSummary(name, input, result) {
   switch (name) {
@@ -807,6 +925,9 @@ function emitToolLog(name, input, result) {
 }
 
 async function executeTool(name, input, requireConfirm) {
+  if (input?.__parse_error) {
+    return { error: 'Tool call was truncated — the response was cut off before the arguments were complete. Please retry this tool call with the full arguments.' };
+  }
   const toolDef = TOOL_MAP[name];
 
   if (toolDef?.dangerous && settings.requireToolConfirmation) {
@@ -951,6 +1072,9 @@ async function executeTool(name, input, requireConfirm) {
       }
 
       case 'write_file': {
+        if (input.content === undefined || input.content === null) {
+          return { error: 'write_file: content is required. You must provide the COMPLETE file content as the "content" parameter — never omit it, never leave it empty.' };
+        }
         const dir = path.dirname(input.path);
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(input.path, input.content, 'utf-8');
@@ -968,9 +1092,12 @@ async function executeTool(name, input, requireConfirm) {
         } else if (shell === 'wsl') {
           cmd = `wsl bash -c "${input.command.replace(/"/g, '\\"')}"`;
         } else {
-          cmd = `powershell -NoProfile -NonInteractive -Command "${input.command.replace(/"/g, '\\"')}"`;
+          // -EncodedCommand avoids ALL quoting/escaping issues with complex PS commands
+          // (npm scripts, $variables, strings with quotes, etc.)
+          const encoded = Buffer.from(input.command, 'utf16le').toString('base64');
+          cmd = `powershell -WindowStyle Hidden -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
         }
-        const { stdout, stderr } = await execAsync(cmd, { timeout });
+        const { stdout, stderr } = await execAsync(cmd, { timeout, windowsHide: true });
         const cap = 4000;
         const trimOut = stdout.trim();
         const trimErr = stderr.trim();
@@ -1326,6 +1453,9 @@ async function executeTool(name, input, requireConfirm) {
         };
       }
 
+      case 'task_complete':
+        return { __task_complete: true, summary: input.summary || 'Task complete.' };
+
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -1359,7 +1489,7 @@ function safeToolResult(result, maxLen = 12000) {
 // CRITICAL: the slice must start at an assistant message. If it starts on a
 // user(tool_result) message, those results reference tool_use IDs from the
 // assistant message that was trimmed — Anthropic returns 400 <nil> for that.
-function pruneMsgs(msgs, keep = 16) {
+function pruneMsgs(msgs, keep = currentAgentMode ? 60 : 16) {
   if (msgs.length <= keep + 1) return msgs;
   let start = msgs.length - keep;
   // Walk forward until we land on an assistant message
@@ -1370,7 +1500,20 @@ function pruneMsgs(msgs, keep = 16) {
 
 // ─── AI Provider Helpers ──────────────────────────────────────────────────────
 
+let currentAgentMode = false;
+let agentWorkingDir = null;
+
+function extractWorkingDir(messages) {
+  for (const m of messages) {
+    if (m.role !== 'user' || typeof m.content !== 'string') continue;
+    const match = m.content.match(/Working Directory:\s*(.+?)(?:\n|$)/);
+    if (match) return match[1].trim();
+  }
+  return null;
+}
+
 function getZeusSystem() {
+  if (currentAgentMode) return getAgentSystem(agentWorkingDir);
   const lang = settings?.chat?.responseLanguage;
   const langLine = lang && lang !== 'auto'
     ? `\n\nAlways respond in ${lang} unless the user writes to you in a different language.`
@@ -1384,18 +1527,34 @@ Personality: Efficient, confident, slightly formal, occasionally witty. Address 
 
 Capabilities: PC control (files, apps, commands, clipboard, screenshots), web search, weather, HTTP requests to any API (GitHub, Spotify, Home Assistant, etc.), desktop notifications, reminders, and persistent memory across all conversations.
 
-MEMORY RULES — follow these exactly:
-1. CALL memory_store immediately when the user mentions any of: their name, job/role, city, tech stack, ongoing projects, preferences, API keys, or anything they want you to remember.
-2. CALL memory_recall at the start of any coding or project task to check for relevant saved context (previous project paths, tech choices, preferences).
-3. When building or coding: store the project name, directory, and tech stack with memory_store before you start writing code.
-4. Do NOT wait until the end of a conversation to store things — store each piece of information as soon as it is mentioned.
-5. Never say "I'll remember that" without immediately calling memory_store.
+MEMORY RULES:
+1. Use memory_store ONLY when the user explicitly asks you to remember something, or when they share information they clearly want saved (name, job, city, project path, API keys). Do NOT call it on casual greetings or small talk.
+2. Use memory_recall at the start of coding or project tasks to check for saved context.
+3. Never say "I'll remember that" without immediately calling memory_store.
+4. Never call memory tools during simple conversation — only when there is clear information worth saving.
 
 Current date/time available via get_datetime. Use web_search for any current information. Use http_request for any external API.
 
 For long coding tasks: work methodically, write complete files, confirm each major step. Never stop mid-task — if you hit a problem, debug and keep going.
 
 Important: Always explain what you're about to do. For destructive actions, confirm intent first.${formatMemoryForPrompt()}${extra}${langLine}`;
+}
+
+function getAgentSystem(workingDir) {
+  return `You are a file-writing coding agent. Your entire job is to call write_file for every file, then call task_complete.
+
+Working directory: ${workingDir || 'see task message'}
+
+ABSOLUTE RULES:
+1. Call write_file IMMEDIATELY — your very first action must be a write_file tool call. No text before it.
+2. One write_file call per file. Content must be COMPLETE working code — no TODOs, no placeholders, no ellipsis.
+3. Use absolute Windows paths: C:\\Users\\...\\project\\src\\index.js
+4. TEXT OUTPUT DOES NOTHING. Writing file content in text, JSON, XML, or code blocks does NOT create files. Only write_file creates files.
+5. Run installs and builds with run_command after writing files.
+6. Call task_complete when every file is written and the project is ready.
+7. Never stop. Never ask questions. Never output file contents as text. Just call write_file.
+
+Your only valid output pattern: write_file → write_file → write_file → run_command → task_complete.`;
 }
 
 function toAnthropicTools(tools) {
@@ -1437,8 +1596,56 @@ ipcMain.on('zeus:cancel-stream', (_, streamId) => {
 // ─── Main AI Handler ──────────────────────────────────────────────────────────
 
 ipcMain.handle('zeus:ai-message', async (event, params) => {
-  const { streamId, messages, provider, model, apiKey, baseURL } = params;
-  const sender = event.sender;
+  const { streamId, messages, provider, model, apiKey, baseURL, imageBase64, agentMode } = params;
+
+  // Detect agent conversations from history so follow-up messages ("continue", corrections)
+  // automatically stay in agent mode even though the frontend doesn't pass agentMode=true.
+  const isAgentConv = !!agentMode || messages.some(m =>
+    m.role === 'user' && typeof m.content === 'string' &&
+    m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
+  );
+  currentAgentMode = isAgentConv;
+  agentWorkingDir = isAgentConv ? extractWorkingDir(messages) : null;
+
+  const rawSender = event.sender;
+
+  // For the first agent message, pre-fetch the directory tree and append it so the model
+  // immediately has the project context. System prompt (getAgentSystem) handles all rules.
+  let effectiveMsgs = messages;
+  if (isAgentConv && agentWorkingDir && messages.length > 0) {
+    const lastUserIdx = [...messages].findLastIndex(m => m.role === 'user');
+    if (lastUserIdx >= 0) {
+      const originalContent = typeof messages[lastUserIdx].content === 'string'
+        ? messages[lastUserIdx].content : '';
+      if (originalContent.includes('[ZEUS CODING AGENT — ACTIVATED]')) {
+        try {
+          const treeResult = await executeTool('get_directory_tree', { path: agentWorkingDir });
+          const treeText = treeResult.tree || JSON.stringify(treeResult, null, 2);
+          effectiveMsgs = [...messages];
+          effectiveMsgs[lastUserIdx] = {
+            ...effectiveMsgs[lastUserIdx],
+            content: originalContent + '\n\n[Working directory snapshot]\n' + treeText,
+          };
+        } catch {}
+      }
+    }
+  }
+
+  // Proxy sender: forwards to main window AND updates mini-HUD with streaming state
+  let accText = '';
+  const sender = {
+    send(channel, data) {
+      rawSender.send(channel, data);
+      if (channel === 'zeus:chunk' && data.streamId === streamId) {
+        if (data.type === 'text') accText += data.text;
+        if (data.type === 'replace') accText = data.text;
+      }
+    },
+    isDestroyed: () => rawSender.isDestroyed(),
+  };
+
+  // Notify mini-HUD that streaming started
+  miniHUDWindow?.webContents?.send('mini:state', { streaming: true });
 
   // Cancel existing stream with same id
   const existing = activeStreams.get(streamId);
@@ -1449,13 +1656,13 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
 
   try {
     if (provider === 'anthropic') {
-      await runAnthropic(sender, streamId, state, messages, model, apiKey);
+      await runAnthropic(sender, streamId, state, effectiveMsgs, model, apiKey, imageBase64);
     } else if (provider === 'openai') {
-      await runOpenAI(sender, streamId, state, messages, model, apiKey);
+      await runOpenAI(sender, streamId, state, effectiveMsgs, model, apiKey, imageBase64);
     } else if (provider === 'gemini') {
-      await runGemini(sender, streamId, state, messages, model, apiKey);
+      await runGemini(sender, streamId, state, effectiveMsgs, model, apiKey, imageBase64);
     } else if (provider === 'ollama') {
-      await runOllama(sender, streamId, state, messages, model, baseURL || 'http://localhost:11434/v1');
+      await runOllama(sender, streamId, state, effectiveMsgs, model, baseURL || 'http://localhost:11434/v1', imageBase64);
     } else {
       sender.send('zeus:chunk', { streamId, type: 'error', error: 'Unknown provider: ' + provider });
     }
@@ -1464,31 +1671,57 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
     sender.send('zeus:chunk', { streamId, type: 'error', error: err.message });
   } finally {
     activeStreams.delete(streamId);
-    if (!sender.isDestroyed()) sender.send('zeus:chunk', { streamId, type: 'done' });
+    if (!rawSender.isDestroyed()) rawSender.send('zeus:chunk', { streamId, type: 'done' });
+    // Update mini-HUD with final response text
+    miniHUDWindow?.webContents?.send('mini:state', {
+      streaming: false,
+      lastMessage: accText.replace(/\n/g, ' ').trim().slice(0, 120),
+    });
   }
 });
 
 // ─── Anthropic ────────────────────────────────────────────────────────────────
 
-async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
+const AGENT_CONTINUE_MSG = '[AGENT CONTINUE] The task is not finished. Call get_directory_tree on the working directory to see what exists, then call write_file for each remaining file with its COMPLETE content. Do not output code as text. Do not ask questions. Keep building.';
+
+async function runAnthropic(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { Anthropic } = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
 
   let msgs = messages.map(m => ({ role: m.role, content: m.content }));
+  let toolCallCount = 0;
+  let agentContinues = 0;
+  const AGENT_MAX_ITERS = 60; // safety cap: never run more than 60 tool-call iterations
 
-  while (!state.cancelled) {
-    const stream = client.messages.stream({
+  // Inject screenshot into last user message if provided
+  if (imageBase64) {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        const base64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+        msgs[i] = { role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
+          { type: 'text', text: typeof msgs[i].content === 'string' ? msgs[i].content : '' },
+        ]};
+        break;
+      }
+    }
+  }
+
+  while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS) {
+    const reqOpts = {
       model: model || 'claude-opus-4-8',
-      max_tokens: settings?.chat?.maxTokens || 4096,
+      max_tokens: currentAgentMode ? 16384 : (settings?.chat?.maxTokens || 4096),
       temperature: settings?.chat?.temperature ?? 0.7,
       system: getZeusSystem(),
       messages: msgs,
-      tools: toAnthropicTools(TOOLS),
-    });
+      tools: toAnthropicTools(currentAgentMode ? AGENT_TOOLS : TOOLS),
+    };
+    if (currentAgentMode) reqOpts.tool_choice = { type: 'any' };
+
+    const stream = client.messages.stream(reqOpts);
 
     let currentBlock = null;
     let inputBuf = '';
-    let finalContent = [];
 
     for await (const ev of stream) {
       if (state.cancelled) break;
@@ -1499,7 +1732,9 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
         } else if (ev.content_block.type === 'tool_use') {
           currentBlock = { type: 'tool_use', id: ev.content_block.id, name: ev.content_block.name, input: {} };
           inputBuf = '';
-          sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: ev.content_block.name });
+          if (ev.content_block.name !== 'task_complete') {
+            sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: ev.content_block.name });
+          }
         }
       }
 
@@ -1512,11 +1747,12 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
       }
 
       if (ev.type === 'content_block_stop') {
-        if (currentBlock?.type === 'text') {
-          finalContent.push(currentBlock);
-        } else if (currentBlock?.type === 'tool_use') {
-          try { currentBlock.input = JSON.parse(inputBuf); } catch {}
-          finalContent.push(currentBlock);
+        if (currentBlock?.type === 'tool_use') {
+          try {
+            currentBlock.input = JSON.parse(inputBuf);
+          } catch {
+            currentBlock.input = { __parse_error: true };
+          }
         }
         currentBlock = null;
         inputBuf = '';
@@ -1528,7 +1764,6 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
     const finalMsg = await stream.finalMessage();
 
     if (finalMsg.stop_reason === 'max_tokens') {
-      // Response was cut off — append partial and keep going
       const assistantContent = finalMsg.content.length
         ? finalMsg.content
         : [{ type: 'text', text: '(response truncated)' }];
@@ -1537,10 +1772,21 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
         { role: 'assistant', content: assistantContent },
         { role: 'user', content: 'continue' },
       ]);
-    } else if (finalMsg.stop_reason === 'tool_use') {
+    } else if (finalMsg.stop_reason === 'tool_use' || finalMsg.stop_reason === 'end_turn') {
       const toolResults = [];
+      let taskDone = false;
+
       for (const block of finalMsg.content) {
         if (block.type !== 'tool_use') continue;
+        toolCallCount++;
+
+        if (block.name === 'task_complete') {
+          const summary = block.input?.summary || 'Task complete.';
+          sender.send('zeus:chunk', { streamId, type: 'text', text: '\n\n✅ ' + summary });
+          taskDone = true;
+          break;
+        }
+
         sender.send('zeus:chunk', { streamId, type: 'tool_exec', tool: block.name, input: block.input });
         const result = await executeTool(block.name, block.input);
         sender.send('zeus:chunk', { streamId, type: 'tool_result', tool: block.name, result });
@@ -1555,8 +1801,42 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
           content: safeToolResult(result),
         });
       }
+
+      if (taskDone) break;
+      if (toolResults.length === 0) {
+        // end_turn with no tools in agent mode — model ignored tool_choice:any.
+        // Nudge it to keep going rather than silently dropping the task.
+        if (currentAgentMode && agentContinues < 3 && !state.cancelled) {
+          agentContinues++;
+          const assistantContent = finalMsg.content.length
+            ? finalMsg.content
+            : [{ type: 'text', text: '(working...)' }];
+          msgs = pruneMsgs([
+            ...msgs,
+            { role: 'assistant', content: assistantContent },
+            { role: 'user', content: AGENT_CONTINUE_MSG },
+          ]);
+          continue;
+        }
+        break;
+      }
       msgs = pruneMsgs([...msgs, { role: 'assistant', content: finalMsg.content }, { role: 'user', content: toolResults }]);
     } else {
+      // Text-only stop — model wasn't forced (non-agent) or tool_choice wasn't respected
+      const shouldContinue = currentAgentMode && agentContinues < 3 && !state.cancelled &&
+        (agentContinues === 0 || toolCallCount > 0);
+      if (shouldContinue) {
+        agentContinues++;
+        const assistantContent = finalMsg.content.length
+          ? finalMsg.content
+          : [{ type: 'text', text: '(working...)' }];
+        msgs = pruneMsgs([
+          ...msgs,
+          { role: 'assistant', content: assistantContent },
+          { role: 'user', content: AGENT_CONTINUE_MSG },
+        ]);
+        continue;
+      }
       break;
     }
   }
@@ -1564,7 +1844,7 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey) {
 
 // ─── OpenAI ───────────────────────────────────────────────────────────────────
 
-async function runOpenAI(sender, streamId, state, messages, model, apiKey) {
+async function runOpenAI(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { OpenAI } = require('openai');
   const client = new OpenAI({ apiKey });
 
@@ -1572,16 +1852,37 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey) {
     { role: 'system', content: getZeusSystem() },
     ...messages.map(m => ({ role: m.role, content: m.content })),
   ];
+  let toolCallCount = 0;
+  let agentContinues = 0;
 
-  while (!state.cancelled) {
-    const stream = await client.chat.completions.create({
+  // Inject screenshot into last user message if provided
+  if (imageBase64) {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        const text = typeof msgs[i].content === 'string' ? msgs[i].content : '';
+        msgs[i] = { role: 'user', content: [
+          { type: 'image_url', image_url: { url: imageBase64 } },
+          { type: 'text', text },
+        ]};
+        break;
+      }
+    }
+  }
+
+  const AGENT_MAX_ITERS_OAI = 60;
+
+  while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OAI) {
+    const streamParams = {
       model: model || 'gpt-4o',
       messages: msgs,
-      tools: toOpenAITools(TOOLS),
+      tools: toOpenAITools(currentAgentMode ? AGENT_TOOLS : TOOLS),
       stream: true,
       temperature: settings?.chat?.temperature ?? 0.7,
-      max_tokens: settings?.chat?.maxTokens || 4096,
-    });
+      max_tokens: currentAgentMode ? 8192 : (settings?.chat?.maxTokens || 4096),
+    };
+    if (currentAgentMode) streamParams.tool_choice = 'required';
+
+    const stream = await client.chat.completions.create(streamParams);
 
     const tcAcc = {};
     let fullContent = '';
@@ -1601,7 +1902,7 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey) {
         for (const tc of delta.tool_calls) {
           if (!tcAcc[tc.index]) {
             tcAcc[tc.index] = { id: '', name: '', args: '' };
-            if (tc.function?.name) {
+            if (tc.function?.name && tc.function.name !== 'task_complete') {
               sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
             }
           }
@@ -1615,12 +1916,13 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey) {
     if (state.cancelled) break;
 
     if (stopReason === 'length') {
-      // Hit token limit — append partial and prune
       msgs.push({ role: 'assistant', content: fullContent || '(truncated)' });
       msgs.push({ role: 'user', content: 'continue' });
       msgs = pruneMsgs(msgs);
-    } else if (stopReason === 'tool_calls') {
+    } else if (stopReason === 'tool_calls' || stopReason === 'stop') {
       const toolCalls = Object.values(tcAcc);
+      if (toolCalls.length === 0) break;
+
       msgs.push({
         role: 'assistant',
         content: fullContent || null,
@@ -1630,15 +1932,26 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey) {
         })),
       });
 
+      let taskDone = false;
       for (const tc of toolCalls) {
         let input = {};
-        try { input = JSON.parse(tc.args); } catch {}
+        try { input = JSON.parse(tc.args); } catch { input = { __parse_error: true }; }
+        toolCallCount++;
+
+        if (tc.name === 'task_complete') {
+          const summary = input.summary || 'Task complete.';
+          sender.send('zeus:chunk', { streamId, type: 'text', text: '\n\n✅ ' + summary });
+          taskDone = true;
+          break;
+        }
+
         sender.send('zeus:chunk', { streamId, type: 'tool_exec', tool: tc.name, input });
         const result = await executeTool(tc.name, input);
         sender.send('zeus:chunk', { streamId, type: 'tool_result', tool: tc.name, result });
         if (result.dataUrl) sender.send('zeus:chunk', { streamId, type: 'screenshot', dataUrl: result.dataUrl });
         msgs.push({ role: 'tool', tool_call_id: tc.id, content: safeToolResult(result) });
       }
+      if (taskDone) break;
       msgs = pruneMsgs(msgs);
     } else {
       break;
@@ -1648,7 +1961,7 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey) {
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 
-async function runGemini(sender, streamId, state, messages, model, apiKey) {
+async function runGemini(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(apiKey);
 
@@ -1658,9 +1971,11 @@ async function runGemini(sender, streamId, state, messages, model, apiKey) {
     systemInstruction: getZeusSystem(),
     generationConfig: {
       temperature: settings?.chat?.temperature ?? 0.7,
-      maxOutputTokens: settings?.chat?.maxTokens || 4096,
+      maxOutputTokens: currentAgentMode ? 8192 : (settings?.chat?.maxTokens || 4096),
     },
   });
+  let toolCallCount = 0;
+  let agentContinues = 0;
 
   const history = messages.slice(0, -1).map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
@@ -1668,10 +1983,23 @@ async function runGemini(sender, streamId, state, messages, model, apiKey) {
   }));
 
   const chat = gemModel.startChat({ history });
-  let prompt = messages[messages.length - 1].content;
+  const lastText = messages[messages.length - 1].content;
+
+  // Build prompt parts — include screenshot if provided
+  let prompt;
+  if (imageBase64) {
+    const base64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    prompt = [
+      { inlineData: { mimeType: 'image/png', data: base64 } },
+      { text: lastText },
+    ];
+  } else {
+    prompt = lastText;
+  }
 
   while (!state.cancelled) {
     const result = await chat.sendMessageStream(prompt);
+    prompt = undefined; // only use imageBase64 on first turn
     let funcCalls = [];
 
     for await (const chunk of result.stream) {
@@ -1697,6 +2025,7 @@ async function runGemini(sender, streamId, state, messages, model, apiKey) {
       const responses = [];
       for (const fc of funcCalls) {
         const input = fc.args || {};
+        toolCallCount++;
         sender.send('zeus:chunk', { streamId, type: 'tool_exec', tool: fc.name, input });
         const res = await executeTool(fc.name, input);
         sender.send('zeus:chunk', { streamId, type: 'tool_result', tool: fc.name, result: res });
@@ -1716,6 +2045,14 @@ async function runGemini(sender, streamId, state, messages, model, apiKey) {
           continue;
         }
       } catch {}
+      // Agent mode auto-continue
+      const shouldContinueGemini = currentAgentMode && agentContinues < 5 && !state.cancelled &&
+        (agentContinues === 0 || toolCallCount > 0);
+      if (shouldContinueGemini) {
+        agentContinues++;
+        prompt = AGENT_CONTINUE_MSG;
+        continue;
+      }
       break;
     }
   }
@@ -1723,39 +2060,107 @@ async function runGemini(sender, streamId, state, messages, model, apiKey) {
 
 // ─── Ollama (OpenAI-compatible local endpoint) ────────────────────────────────
 
-async function runOllama(sender, streamId, state, messages, model, baseURL) {
+// Models confirmed to support OpenAI-format tool calling via Ollama.
+// Any model NOT in this list runs in chat-only mode — no tools passed to the API —
+// so it can never output raw JSON tool-call text by mistake.
+const OLLAMA_TOOL_CAPABLE = new Set([
+  'llama3.1', 'llama3.2',
+  'mistral-nemo',
+  'qwen2.5', 'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:72b',
+  'qwen2.5-coder', 'qwen2.5-coder:7b', 'qwen2.5-coder:14b',
+  'firefunction-v2',
+  'command-r', 'command-r-plus',
+  'smollm2',
+  'hermes3',
+]);
+
+function ollamaModelSupportsTools(model) {
+  if (!model) return false;
+  // Match by base name (strip :tag) so llama3.2:latest, llama3.2:3b, etc. all match
+  const base = model.split(':')[0].toLowerCase();
+  return OLLAMA_TOOL_CAPABLE.has(base) || OLLAMA_TOOL_CAPABLE.has(model.toLowerCase());
+}
+
+// Strip raw tool-call JSON that some Ollama models leak into plain text output.
+function stripRawToolJson(text) {
+  if (!text) return text;
+  return text
+    .replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"param(?:eters)?"\s*:\s*\{[^}]*(?:\{[^}]*\}[^}]*)?\}\s*\}/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Session-level overrides: if a model passes the whitelist but still outputs raw tool text,
+// add it here so future calls skip tools for the rest of the session.
+const ollamaNoToolsModels = new Set();
+
+async function runOllama(sender, streamId, state, messages, model, baseURL, imageBase64) {
   const { OpenAI } = require('openai');
-  // Ollama doesn't need a real key but the SDK requires a non-empty string
   const client = new OpenAI({ apiKey: 'ollama', baseURL });
 
   let msgs = [
     { role: 'system', content: getZeusSystem() },
     ...messages.map(m => ({ role: m.role, content: m.content })),
   ];
+  let toolCallCount = 0;
+  let agentContinues = 0;
 
-  // Detect whether this model supports tool calling by trying once with tools.
-  // If Ollama returns a 400/422 we retry without tools so basic chat always works.
-  let supportsTools = true;
+  // Inject screenshot — Ollama vision models use 'images' field on user messages
+  if (imageBase64) {
+    const base64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        msgs[i] = { ...msgs[i], images: [base64] };
+        break;
+      }
+    }
+  }
 
-  while (!state.cancelled) {
+  // Track the active model — may change mid-session if fast-mode model isn't installed
+  let activeModel = model || 'llama3.2';
+
+  // Only attempt tool calling for whitelisted models AND if not session-blacklisted
+  let supportsTools = ollamaModelSupportsTools(activeModel) && !ollamaNoToolsModels.has(activeModel);
+  const AGENT_MAX_ITERS_OLLAMA = 60;
+
+  while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OLLAMA) {
     let stream;
     try {
       const reqParams = {
-        model: model || 'llama3.2',
+        model: activeModel,
         messages: msgs,
         stream: true,
         temperature: settings?.chat?.temperature ?? 0.7,
-        max_tokens: settings?.chat?.maxTokens || 4096,
-        ...(supportsTools ? { tools: toOpenAITools(TOOLS) } : {}),
+        ...(settings?.chat?.unlimitedTokens ? {} : { max_tokens: currentAgentMode ? 32768 : (settings?.chat?.maxTokens || 4096) }),
+        ...(supportsTools ? { tools: toOpenAITools(currentAgentMode ? AGENT_TOOLS : TOOLS) } : {}),
+        ...(supportsTools && currentAgentMode ? { tool_choice: 'required' } : {}),
       };
       stream = await client.chat.completions.create(reqParams);
     } catch (err) {
+      // Fast-mode (or any) model not installed — fall back to configured model
+      if (err.status === 404) {
+        const fallback = settings?.providers?.ollama?.model || 'llama3.2';
+        if (activeModel !== fallback) {
+          sender.send('zeus:chunk', {
+            streamId, type: 'text',
+            text: `\n> *(Model \`${activeModel}\` not installed — falling back to \`${fallback}\`)*\n\n`,
+          });
+          activeModel = fallback;
+          supportsTools = !ollamaNoToolsModels.has(activeModel);
+          continue;
+        }
+        sender.send('zeus:chunk', {
+          streamId, type: 'error',
+          error: `Model '${activeModel}' not found. Go to Settings → Models to download it.`,
+        });
+        break;
+      }
       if (supportsTools && (err.status === 400 || err.status === 422 || err.message?.toLowerCase().includes('tool'))) {
-        // Model doesn't support tool calling — disable and retry
         supportsTools = false;
+        ollamaNoToolsModels.add(activeModel);
         sender.send('zeus:chunk', {
           streamId, type: 'text',
-          text: '\n> *(Tool calling not supported by this model — running in chat-only mode)*\n\n',
+          text: '\n> *(Tool calling not supported by this model — running in chat-only mode. Try llama3.2, mistral-nemo, or qwen2.5 for tool support.)*\n\n',
         });
         continue;
       }
@@ -1780,7 +2185,9 @@ async function runOllama(sender, streamId, state, messages, model, baseURL) {
         for (const tc of delta.tool_calls) {
           if (!tcAcc[tc.index]) {
             tcAcc[tc.index] = { id: '', name: '', args: '' };
-            if (tc.function?.name) sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
+            if (tc.function?.name && tc.function.name !== 'task_complete') {
+              sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
+            }
           }
           if (tc.id) tcAcc[tc.index].id = tc.id;
           if (tc.function?.name) tcAcc[tc.index].name += tc.function.name;
@@ -1792,12 +2199,13 @@ async function runOllama(sender, streamId, state, messages, model, baseURL) {
     if (state.cancelled) break;
 
     if (stopReason === 'length') {
-      // Hit token limit — append partial and prune
       msgs.push({ role: 'assistant', content: fullContent || '(truncated)' });
       msgs.push({ role: 'user', content: 'continue' });
       msgs = pruneMsgs(msgs);
-    } else if (supportsTools && stopReason === 'tool_calls') {
+    } else if (supportsTools && (stopReason === 'tool_calls' || stopReason === 'stop')) {
       const toolCalls = Object.values(tcAcc);
+      if (toolCalls.length === 0) break;
+
       msgs.push({
         role: 'assistant',
         content: fullContent || null,
@@ -1806,17 +2214,43 @@ async function runOllama(sender, streamId, state, messages, model, baseURL) {
           function: { name: tc.name, arguments: tc.args },
         })),
       });
+      let taskDone = false;
       for (const tc of toolCalls) {
         let input = {};
-        try { input = JSON.parse(tc.args); } catch {}
+        try { input = JSON.parse(tc.args); } catch { input = { __parse_error: true }; }
+        toolCallCount++;
+
+        if (tc.name === 'task_complete') {
+          const summary = input.summary || 'Task complete.';
+          sender.send('zeus:chunk', { streamId, type: 'text', text: '\n\n✅ ' + summary });
+          taskDone = true;
+          break;
+        }
+
         sender.send('zeus:chunk', { streamId, type: 'tool_exec', tool: tc.name, input });
         const result = await executeTool(tc.name, input);
         sender.send('zeus:chunk', { streamId, type: 'tool_result', tool: tc.name, result });
         if (result.dataUrl) sender.send('zeus:chunk', { streamId, type: 'screenshot', dataUrl: result.dataUrl });
         msgs.push({ role: 'tool', tool_call_id: tc.id, content: safeToolResult(result) });
       }
+      if (taskDone) break;
       msgs = pruneMsgs(msgs);
     } else {
+      // Clean any leaked raw tool-call JSON from the visible text before finishing
+      const cleaned = stripRawToolJson(fullContent);
+      if (cleaned !== fullContent) {
+        sender.send('zeus:chunk', { streamId, type: 'replace', text: cleaned });
+      }
+      // Agent mode auto-continue
+      const shouldContinueOllama = currentAgentMode && agentContinues < 5 && !state.cancelled &&
+        (agentContinues === 0 || toolCallCount > 0);
+      if (shouldContinueOllama) {
+        agentContinues++;
+        msgs.push({ role: 'assistant', content: cleaned || fullContent || '(working...)' });
+        msgs.push({ role: 'user', content: AGENT_CONTINUE_MSG });
+        msgs = pruneMsgs(msgs);
+        continue;
+      }
       break;
     }
   }

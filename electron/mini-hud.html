@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Zeus Mini</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 390px; height: 62px;
+      background: rgba(6, 10, 18, 0.94);
+      border: 1px solid rgba(0, 212, 255, 0.22);
+      border-radius: 14px;
+      overflow: hidden;
+      -webkit-app-region: drag;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 9px;
+      box-shadow: 0 0 28px rgba(0,212,255,0.07), 0 8px 36px rgba(0,0,0,0.65);
+    }
+
+    /* ── Orb ─────────────────────────────── */
+    .orb {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: radial-gradient(circle at 32% 30%, #00b8d9, #003d66, #000d1a);
+      box-shadow: 0 0 9px rgba(0,212,255,0.3);
+      animation: pulse 3.5s ease-in-out infinite;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+      position: relative; overflow: hidden;
+      transition: box-shadow 0.4s, background 0.4s;
+    }
+    .orb::after {
+      content: ''; position: absolute;
+      top: 14%; left: 20%; width: 30%; height: 20%;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18); filter: blur(2px);
+    }
+    .orb.active {
+      background: radial-gradient(circle at 32% 30%, #4df0ff, #009fdd, #001833);
+      box-shadow: 0 0 18px rgba(0,212,255,0.75);
+      animation: pulse-fast 0.75s ease-in-out infinite;
+    }
+    @keyframes pulse      { 0%,100%{transform:scale(1);opacity:.8}  50%{transform:scale(1.08);opacity:1} }
+    @keyframes pulse-fast { 0%,100%{transform:scale(1)}              50%{transform:scale(1.14)} }
+    @keyframes scanline   { 0%{top:-2px;opacity:0} 20%{opacity:.5} 80%{opacity:.5} 100%{top:100%;opacity:0} }
+    .scanline {
+      position: absolute; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg,transparent,rgba(0,212,255,.7),transparent);
+      animation: scanline 1.4s ease-in-out infinite;
+      display: none;
+    }
+    .orb.active .scanline { display: block; }
+
+    /* ── Label ───────────────────────────── */
+    .label {
+      font-size: 11px; font-weight: 700;
+      letter-spacing: .22em;
+      color: rgba(0,212,255,0.82);
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+      font-family: 'Orbitron', 'Segoe UI', sans-serif;
+    }
+
+    /* ── Divider ─────────────────────────── */
+    .div { width: 1px; height: 26px; background: rgba(0,212,255,0.13); flex-shrink:0; }
+
+    /* ── Content ─────────────────────────── */
+    .content {
+      flex: 1; min-width: 0;
+      display: flex; align-items: center;
+      -webkit-app-region: no-drag;
+    }
+    .status {
+      flex: 1; font-size: 12px;
+      color: rgba(170,195,220,0.65);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      cursor: text;
+    }
+    .status.thinking {
+      color: rgba(0,212,255,0.7);
+      animation: blink 1s ease-in-out infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:.75} 50%{opacity:.3} }
+
+    input {
+      flex: 1; display: none;
+      background: transparent; border: none; outline: none;
+      color: rgba(200,220,240,0.9); font-size: 12px;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    input::placeholder { color: rgba(90,130,170,0.5); }
+    input.show { display: block; }
+
+    /* ── Buttons ─────────────────────────── */
+    .actions {
+      display: flex; gap: 5px; flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+    .ibtn {
+      width: 22px; height: 22px; border-radius: 6px;
+      border: 1px solid rgba(0,212,255,0.14);
+      background: transparent;
+      color: rgba(0,212,255,0.48);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .ibtn:hover {
+      background: rgba(0,212,255,0.09);
+      color: rgba(0,212,255,0.9);
+      border-color: rgba(0,212,255,0.35);
+    }
+  </style>
+</head>
+<body>
+  <div class="orb" id="orb">
+    <div class="scanline"></div>
+  </div>
+
+  <span class="label">ZEUS</span>
+  <div class="div"></div>
+
+  <div class="content">
+    <span class="status" id="status">Ready</span>
+    <input id="inp" placeholder="Ask Zeus anything…" />
+  </div>
+
+  <div class="actions">
+    <button class="ibtn" id="expand" title="Open Zeus">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+    </button>
+    <button class="ibtn" id="hide" title="Hide">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+
+  <script>
+    const orb    = document.getElementById('orb');
+    const status = document.getElementById('status');
+    const inp    = document.getElementById('inp');
+
+    let inputMode = false;
+
+    function showInput() {
+      inputMode = true;
+      status.style.display = 'none';
+      inp.className = 'show';
+      inp.focus();
+    }
+    function hideInput() {
+      inputMode = false;
+      inp.className = '';
+      status.style.display = '';
+    }
+
+    // State updates from main process
+    if (window.miniZeus) {
+      window.miniZeus.onState(d => {
+        if (d.streaming) {
+          orb.className = 'orb active';
+          status.className = 'status thinking';
+          status.textContent = 'Thinking…';
+          hideInput();
+        } else {
+          orb.className = 'orb';
+          status.className = 'status';
+          status.textContent = d.lastMessage
+            ? d.lastMessage.slice(0, 58) + (d.lastMessage.length > 58 ? '…' : '')
+            : 'Ready — say "Hey Zeus" or type here';
+        }
+      });
+    }
+
+    orb.addEventListener('click', () => window.miniZeus?.focusMain());
+    document.getElementById('expand').addEventListener('click', () => window.miniZeus?.focusMain());
+    document.getElementById('hide').addEventListener('click', () => window.miniZeus?.hide());
+
+    status.addEventListener('click', showInput);
+
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && inp.value.trim()) {
+        window.miniZeus?.send(inp.value.trim());
+        inp.value = '';
+        hideInput();
+        status.textContent = 'Thinking…';
+        status.className = 'status thinking';
+        orb.className = 'orb active';
+      }
+      if (e.key === 'Escape') hideInput();
+    });
+    inp.addEventListener('blur', () => { if (!inp.value.trim()) hideInput(); });
+  </script>
+</body>
+</html>

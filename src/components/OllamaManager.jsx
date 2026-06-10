@@ -30,9 +30,16 @@ function fmtBytes(bytes) {
   return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / 1e6).toFixed(0)} MB`;
 }
 
-function ProgressBar({ completed, total, status }) {
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-  const isActive = total > 0 && status?.startsWith('downloading');
+function ProgressBar({ completed, total, status, error }) {
+  if (status === 'error') {
+    return (
+      <div style={{ marginTop: 8, color: 'var(--c-red)', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace' }}>
+        Error: {error || 'Download failed'}
+      </div>
+    );
+  }
+  const pct = total > 0 ? Math.min(Math.round((completed / total) * 100), 100) : 0;
+  const isActive = total > 0 && status === 'downloading';
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -41,7 +48,7 @@ function ProgressBar({ completed, total, status }) {
         </span>
         {isActive && (
           <span style={{ color: 'var(--c-accent)', fontSize: '10px', fontFamily: 'JetBrains Mono, monospace' }}>
-            {pct}% · {fmtBytes(completed)} / {fmtBytes(total)}
+            {pct}%
           </span>
         )}
       </div>
@@ -164,9 +171,10 @@ export default function OllamaManager({ settings, onModelSelect }) {
       setPulling(p => { const n = { ...p }; delete n[name]; return n; });
       loadAll();
     } else if (pStatus === 'error') {
-      setPulling(p => { const n = { ...p }; delete n[name]; return n; });
+      setPulling(p => ({ ...p, [name]: { status: 'error', completed: 0, total: 0, error: error || 'Download failed' } }));
+      setTimeout(() => setPulling(p => { const n = { ...p }; delete n[name]; return n; }), 4000);
     } else {
-      setPulling(p => ({ ...p, [name]: { status: pStatus, completed: completed || 0, total: total || 0, error } }));
+      setPulling(p => ({ ...p, [name]: { status: pStatus, completed: completed || 0, total: total || 0 } }));
     }
   }
 
@@ -186,7 +194,12 @@ export default function OllamaManager({ settings, onModelSelect }) {
     loadAll();
   }
 
-  const installedIds = new Set(installed.map(m => m.name));
+  // Ollama stores models as 'name:latest' but catalog IDs use 'name' (no tag).
+  // Build the set with both forms so installed detection works either way.
+  const installedIds = new Set([
+    ...installed.map(m => m.name),
+    ...installed.map(m => m.name.replace(/:latest$/, '')),
+  ]);
 
   const catalog = filterCompat && ramGB
     ? CATALOG.filter(m => m.ramMin <= ramGB)
@@ -230,7 +243,8 @@ export default function OllamaManager({ settings, onModelSelect }) {
           </p>
           <div className="flex flex-col gap-2">
             {installed.map(m => {
-              const isActive = settings?.providers?.ollama?.model === m.name;
+              const activeModel = settings?.providers?.ollama?.model || '';
+              const isActive = activeModel === m.name || activeModel === m.name.replace(/:latest$/, '') || m.name === activeModel + ':latest';
               return (
                 <div key={m.name} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{
                   background: isActive ? 'rgba(0,212,255,0.06)' : 'var(--c-card)',
@@ -278,7 +292,7 @@ export default function OllamaManager({ settings, onModelSelect }) {
       )}
 
       {/* ── Model catalog ──────────────────────────────────────────────────── */}
-      {status?.running && (
+      {(status?.running || status?.installed) && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <p style={{ color: 'var(--c-muted)', fontSize: '11px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em' }}>
@@ -286,13 +300,21 @@ export default function OllamaManager({ settings, onModelSelect }) {
             </p>
             <span style={{ color: 'var(--c-muted)', fontSize: '10px' }}>{catalog.length} models</span>
           </div>
+          {!status?.running && (
+            <div className="rounded-lg px-3 py-2 mb-3" style={{ background: 'rgba(255,153,0,0.06)', border: '1px solid rgba(255,153,0,0.2)' }}>
+              <p style={{ color: '#ff9500', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em' }}>
+                OLLAMA NOT RUNNING — downloads will start automatically
+              </p>
+            </div>
+          )}
           <div className="flex flex-col gap-3">
             {catalog.map(m => {
               const isInstalled = installedIds.has(m.id);
               const isPulling = !!pulling[m.id];
               const pullState = pulling[m.id];
               const compatible = !ramGB || m.ramMin <= ramGB;
-              const isActive = settings?.providers?.ollama?.model === m.id;
+              const configuredModel = settings?.providers?.ollama?.model || '';
+              const isActive = configuredModel === m.id || configuredModel === m.id + ':latest' || configuredModel.replace(/:latest$/, '') === m.id;
 
               return (
                 <div key={m.id} className="rounded-xl p-3" style={{
@@ -338,7 +360,7 @@ export default function OllamaManager({ settings, onModelSelect }) {
                       </div>
 
                       {/* Progress bar */}
-                      {isPulling && <ProgressBar completed={pullState.completed} total={pullState.total} status={pullState.status} />}
+                      {isPulling && <ProgressBar completed={pullState.completed} total={pullState.total} status={pullState.status} error={pullState.error} />}
                     </div>
 
                     {/* Action button */}
@@ -379,11 +401,11 @@ export default function OllamaManager({ settings, onModelSelect }) {
         </div>
       )}
 
-      {/* Not running — show a hint about what models look like */}
-      {status && !status.running && !loading && (
+      {/* Ollama not installed at all */}
+      {status && !status.running && !status.installed && !loading && (
         <div className="rounded-xl p-4 text-center" style={cardStyle}>
           <p style={{ color: 'var(--c-muted)', fontSize: '12px' }}>
-            Start Ollama to browse and download models
+            Install Ollama above to download and run local models
           </p>
         </div>
       )}

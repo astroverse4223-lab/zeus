@@ -4,6 +4,7 @@ import useStore from '../store/useStore.js';
 import MessageBubble from './MessageBubble.jsx';
 import InputBar from './InputBar.jsx';
 import Terminal from './Terminal.jsx';
+import Orb from './Orb.jsx';
 
 const QUICK_ACTIONS = [
   { label: 'System Info',    icon: '🖥', prompt: 'Get my full system information — CPU, RAM, disk, and OS details.' },
@@ -14,33 +15,19 @@ const QUICK_ACTIONS = [
   { label: 'Clipboard',      icon: '📋', prompt: 'What is currently in my clipboard?' },
 ];
 
-function WelcomeScreen({ onSend, onOpenAgent }) {
+function WelcomeScreen({ onSend }) {
+  const { streaming } = useStore();
   return (
     <div className="flex flex-col items-center justify-center h-full px-8 hex-bg">
-      {/* Logo */}
+      {/* Orb + Logo */}
       <motion.div
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ duration: 0.5, ease: 'easeOut' }}
         className="flex flex-col items-center mb-8"
       >
-        <div
-          className="w-20 h-20 rounded-2xl flex items-center justify-center mb-4"
-          style={{
-            background: 'linear-gradient(135deg, #0d1f3c, #0a1628)',
-            border: '1px solid var(--c-border-hi)',
-            boxShadow: '0 0 40px rgba(0,212,255,0.2), inset 0 0 20px rgba(0,212,255,0.05)',
-          }}
-        >
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" className="bolt-icon">
-            <path d="M13 2L4.5 13.5H11L10 22L20.5 10H14L13 2Z" fill="url(#welcome-bolt)" />
-            <defs>
-              <linearGradient id="welcome-bolt" x1="4" y1="2" x2="20" y2="22">
-                <stop offset="0%" stopColor="#00d4ff" />
-                <stop offset="100%" stopColor="#0066cc" />
-              </linearGradient>
-            </defs>
-          </svg>
+        <div className="mb-3">
+          <Orb size={110} active={streaming} />
         </div>
 
         <h1
@@ -103,42 +90,11 @@ function WelcomeScreen({ onSend, onOpenAgent }) {
         ))}
       </motion.div>
 
-      {/* Code Agent CTA */}
-      <motion.button
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.65 }}
-        className="w-full max-w-lg mt-3 rounded-xl py-3 flex items-center justify-center gap-3 cursor-pointer transition-all"
-        style={{
-          background: 'var(--c-glow)',
-          border: '1px solid var(--c-accent)',
-          color: 'var(--c-accent)',
-        }}
-        onClick={onOpenAgent}
-        onMouseEnter={e => {
-          e.currentTarget.style.background = 'var(--c-glow-hi)';
-          e.currentTarget.style.boxShadow = '0 0 20px var(--c-glow)';
-        }}
-        onMouseLeave={e => {
-          e.currentTarget.style.background = 'var(--c-glow)';
-          e.currentTarget.style.boxShadow = 'none';
-        }}
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-          <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
-        </svg>
-        <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: '10px', letterSpacing: '0.15em', fontWeight: 700 }}>
-          LAUNCH CODING AGENT
-        </span>
-        <span style={{ fontSize: '11px', color: 'var(--c-dim)', fontFamily: 'Inter, sans-serif', marginLeft: 4 }}>
-          — build, fix &amp; ship code autonomously
-        </span>
-      </motion.button>
     </div>
   );
 }
 
-export default function ChatWindow({ onSend, onStop, onOpenAgent, onAgent }) {
+export default function ChatWindow({ onSend, onStop, onAgent }) {
   const { getActive, streaming, streamingMsgId } = useStore();
   const conversation = getActive();
   const messages = conversation?.messages || [];
@@ -175,7 +131,7 @@ export default function ChatWindow({ onSend, onStop, onOpenAgent, onAgent }) {
     <div className="flex flex-col h-full overflow-hidden">
       {messages.length === 0 ? (
         <div className="flex-1 overflow-hidden">
-          <WelcomeScreen onSend={onSend} onOpenAgent={onOpenAgent} />
+          <WelcomeScreen onSend={onSend} />
         </div>
       ) : (
         <div

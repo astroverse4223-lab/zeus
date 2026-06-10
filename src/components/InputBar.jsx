@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import useStore from '../store/useStore.js';
+import { FAST_MODELS, FAST_MODEL_LABELS } from './HUD.jsx';
 
 const MODELS = {
   anthropic: [
@@ -37,16 +38,20 @@ const MODELS = {
 };
 
 export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onToggleTerminal }) {
-  const { settings, setSettings, streaming } = useStore();
+  const { settings, setSettings, streaming, fastMode } = useStore();
   const [text, setText] = useState('');
   const [listening, setListening] = useState(false);
   const [mode, setMode] = useState('chat'); // 'chat' | 'agent'
+  const [agentDir, setAgentDir] = useState('');
+  const [pendingImage, setPendingImage] = useState(null); // base64 dataURL
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
 
-  const provider  = settings?.activeProvider || 'anthropic';
-  const model     = settings?.providers?.[provider]?.model || '';
-  const modelList = MODELS[provider] || [];
+  const provider      = settings?.activeProvider || 'anthropic';
+  const configModel   = settings?.providers?.[provider]?.model || '';
+  const effectiveModel = fastMode ? (FAST_MODELS[provider] || configModel) : configModel;
+  const model         = configModel; // used for the selector value (always shows configured model)
+  const modelList     = MODELS[provider] || [];
 
   // Auto-resize textarea
   useEffect(() => {
@@ -59,17 +64,34 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
   // Focus on mount
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
+  const browseAgentDir = async () => {
+    const dir = await window.zeus?.pickDirectory();
+    if (dir) setAgentDir(dir);
+  };
+
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
     if (mode === 'agent' && onAgent) {
-      onAgent(trimmed);
+      const dir = agentDir.trim();
+      if (!dir) { alert('Set a working directory for agent mode.'); return; }
+      const prompt = `[ZEUS CODING AGENT — ACTIVATED]\n\nTask: ${trimmed}\nWorking Directory: ${dir}\n\nCall write_file for the first file RIGHT NOW. Do not output any text, explanations, or plans. Every file must be written via write_file tool calls — text output does NOT save files. Call task_complete when done.`;
+      onAgent(prompt);
+      // Switch back to chat mode so follow-up messages ("continue", corrections)
+      // go through onSend instead of re-triggering a new agent conversation.
+      setMode('chat');
     } else {
-      onSend(trimmed);
+      onSend(trimmed, pendingImage);
     }
     setText('');
+    setPendingImage(null);
     textareaRef.current?.focus();
-  }, [text, streaming, onSend, onAgent, mode]);
+  }, [text, streaming, onSend, onAgent, mode, pendingImage, agentDir]);
+
+  const captureScreen = useCallback(async () => {
+    const dataUrl = await window.zeus?.captureScreen();
+    if (dataUrl) setPendingImage(dataUrl);
+  }, []);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -164,48 +186,65 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
         <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em' }}>
           MODEL
         </span>
-        <div className="relative">
-          {provider === 'ollama' ? (
-            /* Ollama: free-text model name since user can pull anything */
-            <input
-              type="text"
-              className="text-xs rounded-md px-2 py-1 outline-none"
-              style={{
-                background: 'var(--c-card)', border: '1px solid var(--c-border)',
-                color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px',
-                width: '130px',
-              }}
-              placeholder="llama3.2"
-              value={model}
-              onChange={e => changeModel(e.target.value)}
-              list="ollama-models"
-            />
-          ) : (
-            <select
-              className="text-xs rounded-md px-2 py-1 outline-none cursor-pointer appearance-none pr-5"
-              style={{
-                background: 'var(--c-card)', border: '1px solid var(--c-border)',
-                color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px',
-              }}
-              value={model}
-              onChange={e => changeModel(e.target.value)}
-            >
-              {modelList.map(m => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
-          )}
-          {/* Datalist for Ollama autocomplete suggestions */}
-          <datalist id="ollama-models">
-            {MODELS.ollama.map(m => <option key={m.id} value={m.id} />)}
-          </datalist>
-          {provider !== 'ollama' && (
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-muted)', pointerEvents: 'none' }}>
-              <polyline points="6 9 12 15 18 9" />
+
+        {/* Fast mode override badge — shown instead of/alongside model selector */}
+        {fastMode ? (
+          <div className="flex items-center gap-1.5 rounded-md px-2 py-1" style={{
+            background: 'rgba(255,213,0,0.08)',
+            border: '1px solid rgba(255,213,0,0.35)',
+          }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="#ffd500" style={{ filter: 'drop-shadow(0 0 3px rgba(255,213,0,0.6))' }}>
+              <path d="M13 2L4.5 13.5H11L10 22L20.5 10H14L13 2Z" />
             </svg>
-          )}
-        </div>
+            <span style={{ color: '#ffd500', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>
+              {FAST_MODEL_LABELS[provider] || effectiveModel}
+            </span>
+            <span style={{ color: 'rgba(255,213,0,0.5)', fontSize: '9px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em' }}>
+              FAST
+            </span>
+          </div>
+        ) : (
+          <div className="relative">
+            {provider === 'ollama' ? (
+              <input
+                type="text"
+                className="text-xs rounded-md px-2 py-1 outline-none"
+                style={{
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px',
+                  width: '130px',
+                }}
+                placeholder="llama3.2"
+                value={model}
+                onChange={e => changeModel(e.target.value)}
+                list="ollama-models"
+              />
+            ) : (
+              <select
+                className="text-xs rounded-md px-2 py-1 outline-none cursor-pointer appearance-none pr-5"
+                style={{
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px',
+                }}
+                value={model}
+                onChange={e => changeModel(e.target.value)}
+              >
+                {modelList.map(m => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            )}
+            <datalist id="ollama-models">
+              {MODELS.ollama.map(m => <option key={m.id} value={m.id} />)}
+            </datalist>
+            {provider !== 'ollama' && (
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-muted)', pointerEvents: 'none' }}>
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            )}
+          </div>
+        )}
 
         <div className="flex-1" />
 
@@ -213,6 +252,27 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
           {text.length > 0 ? `${text.length} chars` : 'Enter ↵ to send · Shift+Enter for newline'}
         </span>
       </div>
+
+      {/* Agent directory row */}
+      {mode === 'agent' && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em', flexShrink: 0 }}>DIR</span>
+          <input
+            type="text"
+            className="flex-1 rounded-lg px-3 py-1.5 outline-none"
+            style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px' }}
+            placeholder="C:\Users\you\projects\myapp"
+            value={agentDir}
+            onChange={e => setAgentDir(e.target.value)}
+          />
+          <button
+            className="btn-ghost rounded-lg px-3 py-1.5 flex-shrink-0"
+            style={{ fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em' }}
+            onClick={browseAgentDir}
+            type="button"
+          >BROWSE</button>
+        </div>
+      )}
 
       {/* Input row */}
       <div
@@ -239,6 +299,39 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
           disabled={streaming}
           rows={1}
         />
+
+        {/* Attached screenshot thumbnail */}
+        {pendingImage && (
+          <div className="relative flex-shrink-0" style={{ width: 44, height: 44 }}>
+            <img src={pendingImage} alt="screen" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--c-accent)', opacity: 0.85 }} />
+            <button
+              onClick={() => setPendingImage(null)}
+              style={{
+                position: 'absolute', top: -4, right: -4, width: 14, height: 14,
+                borderRadius: '50%', background: 'var(--c-red)', border: 'none',
+                color: '#fff', fontSize: 8, cursor: 'pointer', display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+              }}
+            >✕</button>
+          </div>
+        )}
+
+        {/* Screen capture button */}
+        <button
+          className="btn-icon w-9 h-9 rounded-lg flex-shrink-0"
+          style={{
+            background: pendingImage ? 'rgba(0,212,255,0.12)' : 'transparent',
+            border: pendingImage ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
+            color: pendingImage ? 'var(--c-accent)' : 'var(--c-muted)',
+            transition: 'all 0.15s',
+          }}
+          onClick={captureScreen}
+          title="Attach screenshot — let Zeus see your screen"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+          </svg>
+        </button>
 
         {/* Terminal toggle button */}
         {onToggleTerminal && (

@@ -56,4 +56,17 @@ contextBridge.exposeInMainWorld('zeus', {
     ipcRenderer.on('zeus:terminal-log', handler);
     return () => ipcRenderer.removeListener('zeus:terminal-log', handler);
   },
+
+  // Screen capture (vision / screen awareness)
+  captureScreen: () => ipcRenderer.invoke('zeus:capture-screen'),
+
+  // Floating mini-HUD overlay
+  toggleMiniHUD: () => ipcRenderer.invoke('zeus:toggle-mini-hud'),
+
+  // Receive messages typed in the mini-HUD
+  onMiniMessage: (cb) => {
+    const handler = (_, text) => cb(text);
+    ipcRenderer.on('zeus:mini-message', handler);
+    return () => ipcRenderer.removeListener('zeus:mini-message', handler);
+  },
 });

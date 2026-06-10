@@ -56,7 +56,7 @@ function ConvItem({ conv, active, onSelect, onDelete }) {
   );
 }
 
-export default function Sidebar({ onOpenAgent }) {
+export default function Sidebar() {
   const {
     conversations, activeId,
     newConversation, selectConversation, deleteConversation,
@@ -86,17 +86,6 @@ export default function Sidebar({ onOpenAgent }) {
             <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
           </svg>
           NEW CONVERSATION
-        </button>
-        <button
-          className="w-full btn-ghost rounded-lg py-2 font-orbitron tracking-wider flex items-center justify-center gap-2"
-          style={{ fontSize: '10px', letterSpacing: '0.1em' }}
-          onClick={onOpenAgent}
-          disabled={streaming}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
-          </svg>
-          CODE AGENT
         </button>
       </div>
 

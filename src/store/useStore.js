@@ -93,6 +93,12 @@ const useStore = create(
       sidebarOpen: true,
       setSidebarOpen(v) { set({ sidebarOpen: v }); },
 
+      fastMode: false,
+      setFastMode(v) { set({ fastMode: v }); },
+
+      wakeWordEnabled: false,
+      setWakeWordEnabled(v) { set({ wakeWordEnabled: v }); },
+
       // ── Streaming ────────────────────────────────────────────────────────────
       streaming: false,
       streamingMsgId: null,
