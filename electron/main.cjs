@@ -1083,7 +1083,12 @@ async function executeTool(name, input, requireConfirm) {
 
       case 'run_command': {
         const shell = input.shell || settings?.system?.shell || 'powershell';
-        const timeout = (settings?.system?.requestTimeout || 60) * 1000;
+        // In agent mode npm install / builds can take several minutes — use a 5 min floor.
+        const baseSecs = settings?.system?.requestTimeout || 60;
+        const timeout = currentAgentMode ? Math.max(baseSecs * 1000, 300000) : baseSecs * 1000;
+        // Default cwd to the agent's project directory so `npx create-react-app .`,
+        // `npm install`, etc. all run inside the right folder, not the Electron app dir.
+        const cmdCwd = (currentAgentMode && agentWorkingDir) ? agentWorkingDir : undefined;
         let cmd;
         if (shell === 'cmd') {
           cmd = `cmd /c "${input.command.replace(/"/g, '\\"')}"`;
@@ -1097,7 +1102,8 @@ async function executeTool(name, input, requireConfirm) {
           const encoded = Buffer.from(input.command, 'utf16le').toString('base64');
           cmd = `powershell -WindowStyle Hidden -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
         }
-        const { stdout, stderr } = await execAsync(cmd, { timeout, windowsHide: true });
+        const execOpts = { timeout, windowsHide: true, ...(cmdCwd ? { cwd: cmdCwd } : {}) };
+        const { stdout, stderr } = await execAsync(cmd, execOpts);
         const cap = 4000;
         const trimOut = stdout.trim();
         const trimErr = stderr.trim();
@@ -1691,7 +1697,7 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey, im
   let msgs = messages.map(m => ({ role: m.role, content: m.content }));
   let toolCallCount = 0;
   let agentContinues = 0;
-  const AGENT_MAX_ITERS = 60; // safety cap: never run more than 60 tool-call iterations
+  const AGENT_MAX_ITERS = 300; // large React/full-stack projects need 100+ tool calls
 
   // Inject screenshot into last user message if provided
   if (imageBase64) {
@@ -1710,7 +1716,7 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey, im
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS) {
     const reqOpts = {
       model: model || 'claude-opus-4-8',
-      max_tokens: currentAgentMode ? 16384 : (settings?.chat?.maxTokens || 4096),
+      max_tokens: currentAgentMode ? 32768 : (settings?.chat?.maxTokens || 4096),
       temperature: settings?.chat?.temperature ?? 0.7,
       system: getZeusSystem(),
       messages: msgs,
@@ -1823,7 +1829,7 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey, im
       msgs = pruneMsgs([...msgs, { role: 'assistant', content: finalMsg.content }, { role: 'user', content: toolResults }]);
     } else {
       // Text-only stop — model wasn't forced (non-agent) or tool_choice wasn't respected
-      const shouldContinue = currentAgentMode && agentContinues < 3 && !state.cancelled &&
+      const shouldContinue = currentAgentMode && agentContinues < 10 && !state.cancelled &&
         (agentContinues === 0 || toolCallCount > 0);
       if (shouldContinue) {
         agentContinues++;
@@ -1869,7 +1875,7 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
     }
   }
 
-  const AGENT_MAX_ITERS_OAI = 60;
+  const AGENT_MAX_ITERS_OAI = 300;
 
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OAI) {
     const streamParams = {
@@ -1878,7 +1884,7 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
       tools: toOpenAITools(currentAgentMode ? AGENT_TOOLS : TOOLS),
       stream: true,
       temperature: settings?.chat?.temperature ?? 0.7,
-      max_tokens: currentAgentMode ? 8192 : (settings?.chat?.maxTokens || 4096),
+      max_tokens: currentAgentMode ? 16384 : (settings?.chat?.maxTokens || 4096),
     };
     if (currentAgentMode) streamParams.tool_choice = 'required';
 
@@ -2121,7 +2127,7 @@ async function runOllama(sender, streamId, state, messages, model, baseURL, imag
 
   // Only attempt tool calling for whitelisted models AND if not session-blacklisted
   let supportsTools = ollamaModelSupportsTools(activeModel) && !ollamaNoToolsModels.has(activeModel);
-  const AGENT_MAX_ITERS_OLLAMA = 60;
+  const AGENT_MAX_ITERS_OLLAMA = 300;
 
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OLLAMA) {
     let stream;

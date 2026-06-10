@@ -73,13 +73,22 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
     if (mode === 'agent' && onAgent) {
-      const dir = agentDir.trim();
-      if (!dir) { alert('Set a working directory for agent mode.'); return; }
-      const prompt = `[ZEUS CODING AGENT — ACTIVATED]\n\nTask: ${trimmed}\nWorking Directory: ${dir}\n\nCall write_file for the first file RIGHT NOW. Do not output any text, explanations, or plans. Every file must be written via write_file tool calls — text output does NOT save files. Call task_complete when done.`;
-      onAgent(prompt);
-      // Switch back to chat mode so follow-up messages ("continue", corrections)
-      // go through onSend instead of re-triggering a new agent conversation.
-      setMode('chat');
+      // If the active conversation already has an agent task running, treat this as a
+      // chat follow-up (e.g. "continue") rather than spawning a brand-new agent session.
+      const activeConv = useStore.getState().getActive();
+      const isExistingAgent = activeConv?.messages?.some(m =>
+        m.role === 'user' && typeof m.content === 'string' &&
+        m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
+      );
+      if (isExistingAgent) {
+        onSend(trimmed, pendingImage);
+      } else {
+        const dir = agentDir.trim();
+        if (!dir) { alert('Set a working directory for agent mode.'); return; }
+        const prompt = `[ZEUS CODING AGENT — ACTIVATED]\n\nTask: ${trimmed}\nWorking Directory: ${dir}\n\nCall write_file for the first file RIGHT NOW. Do not output any text, explanations, or plans. Every file must be written via write_file tool calls — text output does NOT save files. Call task_complete when done.`;
+        onAgent(prompt);
+        setMode('chat');
+      }
     } else {
       onSend(trimmed, pendingImage);
     }
