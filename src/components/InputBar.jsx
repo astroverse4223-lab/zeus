@@ -37,11 +37,19 @@ const MODELS = {
   ],
 };
 
+// Shorten a path for the directory chip — show the last two segments.
+function shortDir(p) {
+  if (!p) return '';
+  const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
+  return parts.length > 2 ? '…\\' + parts.slice(-2).join('\\') : p;
+}
+
 export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, onToggleTerminal }) {
-  const { settings, setSettings, streaming, fastMode } = useStore();
-  const [text, setText] = useState('');
+  const {
+    settings, setSettings, streaming, fastMode, agentMode, setAgentMode, agentDir,
+    draft: text, setDraft: setText, pendingImage, setPendingImage,
+  } = useStore();
   const [listening, setListening] = useState(false);
-  const [pendingImage, setPendingImage] = useState(null); // base64 dataURL
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -62,16 +70,37 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   // Focus on mount
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
+  // Turning agent mode on the first time (no directory yet) opens the setup modal.
+  const enableAgent = () => {
+    setAgentMode(true);
+    if (!agentDir) onOpenAgent();
+  };
+
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
-    // Agent conversations are auto-detected by the backend from the activation message
-    // in history, so follow-ups ("continue", corrections) just send as normal chat.
-    onSend(trimmed, pendingImage);
+
+    if (agentMode) {
+      if (!agentDir) { onOpenAgent(); return; } // need a working directory first
+      const activeConv = useStore.getState().getActive();
+      const isExistingAgent = activeConv?.messages?.some(m =>
+        m.role === 'user' && typeof m.content === 'string' &&
+        m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
+      );
+      // First task in a conversation gets the activation header (nicely rendered + triggers
+      // the directory-tree snapshot). Follow-ups send as plain text — the sticky toggle keeps
+      // the backend in agent mode bound to agentDir.
+      const payload = isExistingAgent
+        ? trimmed
+        : `[ZEUS CODING AGENT — ACTIVATED]\n\nTask: ${trimmed}\nWorking Directory: ${agentDir}\n\nThe working directory snapshot is attached. Make the changes RIGHT NOW with write_file / patch_file — no plans, no text-only output. Text does not save files. Call task_complete when done.`;
+      onSend(payload, pendingImage, true, agentDir);
+    } else {
+      onSend(trimmed, pendingImage, false, '');
+    }
     setText('');
     setPendingImage(null);
     textareaRef.current?.focus();
-  }, [text, streaming, onSend, pendingImage]);
+  }, [text, streaming, onSend, pendingImage, agentMode, agentDir, onOpenAgent]);
 
   const captureScreen = useCallback(async () => {
     const dataUrl = await window.zeus?.captureScreen();
@@ -135,28 +164,63 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
     >
       {/* Model selector row */}
       <div className="flex items-center gap-2 mb-2 px-1">
-        {/* Coding Agent launcher */}
-        <button
-          onClick={onOpenAgent}
-          disabled={streaming}
-          className="flex items-center gap-1.5 rounded-lg flex-shrink-0 agent-launch-btn"
-          style={{
-            padding: '4px 11px',
-            background: 'linear-gradient(135deg, rgba(124,58,237,0.18), rgba(168,85,247,0.14))',
-            border: '1px solid rgba(168,85,247,0.45)',
-            color: 'var(--c-purple)',
-            fontFamily: 'Orbitron, sans-serif', fontSize: '10px', letterSpacing: '0.08em', fontWeight: 600,
-            cursor: streaming ? 'default' : 'pointer',
-            opacity: streaming ? 0.5 : 1,
-            transition: 'all 0.15s',
-          }}
-          title="Launch the coding agent — autonomously reads, writes, runs & fixes code"
+        {/* Sticky Chat / Agent toggle — stays where you put it, like VSCode */}
+        <div
+          className="flex items-center rounded-lg flex-shrink-0"
+          style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', padding: '2px' }}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
-          </svg>
-          AGENT
-        </button>
+          <button
+            onClick={() => setAgentMode(false)}
+            style={{
+              padding: '3px 10px', borderRadius: '6px', fontSize: '10px', cursor: 'pointer', border: 'none',
+              fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em', transition: 'all 0.15s',
+              background: !agentMode ? 'var(--c-accent)' : 'transparent',
+              color: !agentMode ? '#080c14' : 'var(--c-muted)',
+              fontWeight: !agentMode ? 700 : 400,
+              boxShadow: !agentMode ? '0 0 8px rgba(0,212,255,0.4)' : 'none',
+            }}
+          >
+            CHAT
+          </button>
+          <button
+            onClick={enableAgent}
+            className="flex items-center gap-1"
+            style={{
+              padding: '3px 10px', borderRadius: '6px', fontSize: '10px', cursor: 'pointer', border: 'none',
+              fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em', transition: 'all 0.15s',
+              background: agentMode ? 'var(--c-purple)' : 'transparent',
+              color: agentMode ? '#fff' : 'var(--c-muted)',
+              fontWeight: agentMode ? 700 : 400,
+              boxShadow: agentMode ? '0 0 8px rgba(168,85,247,0.4)' : 'none',
+            }}
+            title="Agent mode stays on — keeps reading, writing & fixing code in your project until you switch back to Chat"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+            </svg>
+            AGENT
+          </button>
+        </div>
+
+        {/* Working directory chip — click to change */}
+        {agentMode && (
+          <button
+            onClick={onOpenAgent}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 flex-shrink-0"
+            style={{
+              background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.3)',
+              color: agentDir ? 'var(--c-purple)' : 'var(--c-muted)',
+              fontFamily: 'JetBrains Mono, monospace', fontSize: '10px', cursor: 'pointer',
+              maxWidth: 220,
+            }}
+            title={agentDir ? `Agent working directory:\n${agentDir}\n\nClick to change` : 'Set a project directory for the agent'}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            </svg>
+            <span className="truncate">{agentDir ? shortDir(agentDir) : 'Set folder…'}</span>
+          </button>
+        )}
 
         <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em' }}>
           MODEL
@@ -244,6 +308,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
           }}
           placeholder={
             streaming ? 'Zeus is thinking…'
+            : agentMode ? `Agent mode — describe a coding task in ${shortDir(agentDir) || 'your project'}…`
             : 'Ask Zeus anything, or command your PC…'
           }
           value={text}
@@ -350,21 +415,31 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
             className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center"
             onClick={handleSend}
             disabled={!text.trim()}
-            title="Send (Enter)"
+            title={agentMode ? 'Send to agent (Enter)' : 'Send (Enter)'}
             style={{
               opacity: text.trim() ? 1 : 0.4,
               cursor: text.trim() ? 'pointer' : 'default',
               border: 'none',
-              background: 'linear-gradient(135deg, var(--c-accent2), var(--c-accent))',
-              boxShadow: text.trim() ? '0 0 14px rgba(0,212,255,0.35)' : 'none',
+              background: agentMode
+                ? 'linear-gradient(135deg, #7c3aed, #a855f7)'
+                : 'linear-gradient(135deg, var(--c-accent2), var(--c-accent))',
+              boxShadow: text.trim()
+                ? agentMode ? '0 0 14px rgba(168,85,247,0.45)' : '0 0 14px rgba(0,212,255,0.35)'
+                : 'none',
               color: '#fff',
               transition: 'background 0.2s, box-shadow 0.2s',
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
+            {agentMode ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            )}
           </button>
         )}
       </div>

@@ -16,7 +16,7 @@ const QUICK_ACTIONS = [
 ];
 
 function WelcomeScreen({ onSend }) {
-  const { streaming } = useStore();
+  const { streaming, speaking } = useStore();
   return (
     <div className="flex flex-col items-center justify-center h-full px-8 hex-bg">
       {/* Orb + Logo */}
@@ -27,7 +27,7 @@ function WelcomeScreen({ onSend }) {
         className="flex flex-col items-center mb-8"
       >
         <div className="mb-3">
-          <Orb size={110} active={streaming} />
+          <Orb size={110} active={streaming} speaking={speaking} />
         </div>
 
         <h1
@@ -102,6 +102,26 @@ export default function ChatWindow({ onSend, onStop, onOpenAgent }) {
   const scrollRef = useRef(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  // Drag & drop: images attach as a screenshot, text/code files get pasted into the draft.
+  const handleDrop = useCallback(async (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (!files.length) return;
+    const st = useStore.getState();
+    for (const f of files) {
+      if (f.type.startsWith('image/')) {
+        const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
+        st.setPendingImage(dataUrl);
+      } else if (f.size <= 256 * 1024) {
+        const txt = await f.text();
+        const cur = st.draft;
+        st.setDraft((cur ? cur + '\n\n' : '') + '```' + f.name + '\n' + txt + '\n```');
+      }
+    }
+  }, []);
 
   // Auto-open terminal when Zeus uses a tool
   useEffect(() => {
@@ -128,7 +148,31 @@ export default function ChatWindow({ onSend, onStop, onOpenAgent }) {
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div
+      className="flex flex-col h-full overflow-hidden relative"
+      onDragOver={(e) => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      <AnimatePresence>
+        {dragOver && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none"
+            style={{ background: 'rgba(0,212,255,0.06)', border: '2px dashed var(--c-accent)', borderRadius: 12, margin: 8 }}
+          >
+            <div className="flex flex-col items-center gap-2" style={{ color: 'var(--c-accent)' }}>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              <span style={{ fontFamily: 'Orbitron, sans-serif', fontSize: 12, letterSpacing: '0.12em' }}>DROP TO ATTACH</span>
+              <span style={{ color: 'var(--c-muted)', fontSize: 10 }}>Images attach · text & code files paste in</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {messages.length === 0 ? (
         <div className="flex-1 overflow-hidden">
           <WelcomeScreen onSend={onSend} />

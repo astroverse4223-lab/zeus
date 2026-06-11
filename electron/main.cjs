@@ -924,6 +924,54 @@ function emitToolLog(name, input, result) {
   if (lines.length) mainWindow.webContents.send('zeus:terminal-log', { lines });
 }
 
+// ─── Agent File-Change Tracking ───────────────────────────────────────────────
+// Records every file mutation an agent makes so the UI can show diffs and offer undo.
+const agentFileChanges = [];
+let fileChangeSeq = 0;
+
+function recordFileChange(change) {
+  const entry = { id: `fc-${Date.now()}-${++fileChangeSeq}`, ts: Date.now(), undone: false, ...change };
+  agentFileChanges.push(entry);
+  if (agentFileChanges.length > 300) agentFileChanges.shift();
+  // Send only lightweight metadata to the renderer; full before/after stays in main
+  // and is fetched on demand when the user expands a diff.
+  if (mainWindow?.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('zeus:file-change', {
+      id: entry.id, kind: entry.kind, path: entry.path, from: entry.from, to: entry.to, ts: entry.ts,
+      beforeBytes: entry.before != null ? Buffer.byteLength(entry.before) : 0,
+      afterBytes:  entry.after  != null ? Buffer.byteLength(entry.after)  : 0,
+    });
+  }
+  return entry;
+}
+
+ipcMain.handle('zeus:file-change-diff', (_, id) => {
+  const c = agentFileChanges.find(x => x.id === id);
+  if (!c) return null;
+  return { kind: c.kind, path: c.path, from: c.from, to: c.to, before: c.before ?? null, after: c.after ?? null, undone: c.undone };
+});
+
+ipcMain.handle('zeus:undo-file-change', (_, id) => {
+  const c = agentFileChanges.find(x => x.id === id);
+  if (!c) return { ok: false, error: 'Change not found' };
+  if (c.undone) return { ok: false, error: 'Already undone' };
+  try {
+    switch (c.kind) {
+      case 'create': if (fs.existsSync(c.path)) fs.unlinkSync(c.path); break;
+      case 'modify': fs.writeFileSync(c.path, c.before ?? '', 'utf-8'); break;
+      case 'delete': fs.mkdirSync(path.dirname(c.path), { recursive: true }); fs.writeFileSync(c.path, c.before ?? '', 'utf-8'); break;
+      case 'mkdir':  try { fs.rmdirSync(c.path); } catch {} break;
+      case 'rmdir':  fs.mkdirSync(c.path, { recursive: true }); break;
+      case 'move':   fs.renameSync(c.to, c.from); break;
+      default: return { ok: false, error: `Cannot undo: ${c.kind}` };
+    }
+    c.undone = true;
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 async function executeTool(name, input, requireConfirm) {
   if (input?.__parse_error) {
     return { error: 'Tool call was truncated — the response was cut off before the arguments were complete. Please retry this tool call with the full arguments.' };
@@ -1076,8 +1124,12 @@ async function executeTool(name, input, requireConfirm) {
           return { error: 'write_file: content is required. You must provide the COMPLETE file content as the "content" parameter — never omit it, never leave it empty.' };
         }
         const dir = path.dirname(input.path);
+        const existed = fs.existsSync(input.path);
+        let before = null;
+        if (existed) { try { before = fs.readFileSync(input.path, 'utf-8'); } catch {} }
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(input.path, input.content, 'utf-8');
+        recordFileChange({ kind: existed ? 'modify' : 'create', path: input.path, before, after: input.content });
         return { success: true, path: input.path, bytesWritten: Buffer.byteLength(input.content) };
       }
 
@@ -1144,9 +1196,12 @@ async function executeTool(name, input, requireConfirm) {
         };
       }
 
-      case 'create_directory':
+      case 'create_directory': {
+        const existed = fs.existsSync(input.path);
         fs.mkdirSync(input.path, { recursive: true });
+        if (!existed) recordFileChange({ kind: 'mkdir', path: input.path });
         return { success: true, path: input.path };
+      }
 
       case 'delete_path': {
         if (!fs.existsSync(input.path)) return { error: `Not found: ${input.path}` };
@@ -1155,8 +1210,12 @@ async function executeTool(name, input, requireConfirm) {
           const contents = fs.readdirSync(input.path);
           if (contents.length > 0) return { error: `Directory is not empty (${contents.length} items). List its contents first if you want to confirm deletion.` };
           fs.rmdirSync(input.path);
+          recordFileChange({ kind: 'rmdir', path: input.path });
         } else {
+          let before = null;
+          try { before = fs.readFileSync(input.path, 'utf-8'); } catch {}
           fs.unlinkSync(input.path);
+          recordFileChange({ kind: 'delete', path: input.path, before });
         }
         return { success: true, deleted: input.path };
       }
@@ -1179,6 +1238,7 @@ async function executeTool(name, input, requireConfirm) {
       case 'move_file':
         if (!fs.existsSync(input.source)) return { error: `Source not found: ${input.source}` };
         fs.renameSync(input.source, input.destination);
+        recordFileChange({ kind: 'move', path: input.destination, from: input.source, to: input.destination });
         return { success: true, from: input.source, to: input.destination };
 
       // ── Coding Agent Tools ───────────────────────────────────────────────────
@@ -1306,7 +1366,9 @@ async function executeTool(name, input, requireConfirm) {
         if (occurrences > 1) {
           return { error: `Text appears ${occurrences} times — add more surrounding context to make it unique.` };
         }
-        fs.writeFileSync(filePath, content.replace(original, replacement), 'utf-8');
+        const patched = content.replace(original, replacement);
+        fs.writeFileSync(filePath, patched, 'utf-8');
+        recordFileChange({ kind: 'modify', path: filePath, before: content, after: patched });
         return { success: true, path: filePath, linesAffected: original.split('\n').length };
       }
 
@@ -1609,6 +1671,46 @@ function toGeminiTools(tools) {
   return [{ functionDeclarations: decls }];
 }
 
+// ─── Conversation Title Generation ────────────────────────────────────────────
+
+ipcMain.handle('zeus:generate-title', async (_, { provider, model, apiKey, baseURL, prompt }) => {
+  const sys = 'You write ultra-short chat titles. Reply with ONLY a 3 to 5 word title in Title Case that captures the topic. No quotes, no trailing punctuation, no preamble.';
+  try {
+    if (provider === 'anthropic' && apiKey) {
+      const { Anthropic } = require('@anthropic-ai/sdk');
+      const r = await new Anthropic({ apiKey }).messages.create({
+        model: model || 'claude-haiku-4-5-20251001', max_tokens: 20,
+        system: sys, messages: [{ role: 'user', content: prompt }],
+      });
+      return (r.content?.[0]?.text || '').trim();
+    }
+    if (provider === 'openai' && apiKey) {
+      const { OpenAI } = require('openai');
+      const r = await new OpenAI({ apiKey }).chat.completions.create({
+        model: model || 'gpt-4o-mini', max_tokens: 20,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: prompt }],
+      });
+      return (r.choices?.[0]?.message?.content || '').trim();
+    }
+    if (provider === 'gemini' && apiKey) {
+      const { GoogleGenerativeAI } = require('@google/generative-ai');
+      const m = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: model || 'gemini-2.0-flash', systemInstruction: sys });
+      return ((await m.generateContent(prompt)).response.text() || '').trim();
+    }
+    if (provider === 'ollama') {
+      const { OpenAI } = require('openai');
+      const r = await new OpenAI({ apiKey: 'ollama', baseURL: baseURL || 'http://localhost:11434/v1' }).chat.completions.create({
+        model: model || 'llama3.2', max_tokens: 20,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: prompt }],
+      });
+      return (r.choices?.[0]?.message?.content || '').trim();
+    }
+  } catch (e) {
+    console.error('[Zeus Title]', e.message);
+  }
+  return null;
+});
+
 // ─── Active Streams ───────────────────────────────────────────────────────────
 
 const activeStreams = new Map();
@@ -1621,16 +1723,20 @@ ipcMain.on('zeus:cancel-stream', (_, streamId) => {
 // ─── Main AI Handler ──────────────────────────────────────────────────────────
 
 ipcMain.handle('zeus:ai-message', async (event, params) => {
-  const { streamId, messages, provider, model, apiKey, baseURL, imageBase64, agentMode } = params;
+  const { streamId, messages, provider, model, apiKey, baseURL, imageBase64, agentMode, agentDir } = params;
 
-  // Detect agent conversations from history so follow-up messages ("continue", corrections)
-  // automatically stay in agent mode even though the frontend doesn't pass agentMode=true.
-  const isAgentConv = !!agentMode || messages.some(m =>
-    m.role === 'user' && typeof m.content === 'string' &&
-    m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
-  );
+  // Agent mode is a sticky toggle owned by the UI. When the frontend sends an explicit
+  // boolean we trust it (so the user can freely switch between chat and agent). Only when
+  // it's absent do we fall back to detecting the activation message in history.
+  const isAgentConv = typeof agentMode === 'boolean'
+    ? agentMode
+    : messages.some(m =>
+        m.role === 'user' && typeof m.content === 'string' &&
+        m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
+      );
   currentAgentMode = isAgentConv;
-  agentWorkingDir = isAgentConv ? extractWorkingDir(messages) : null;
+  // Prefer the directory the UI is bound to; fall back to scraping it from history.
+  agentWorkingDir = isAgentConv ? ((agentDir && agentDir.trim()) || extractWorkingDir(messages)) : null;
 
   const rawSender = event.sender;
 

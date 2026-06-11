@@ -237,7 +237,7 @@ function AppearanceTab({ local, setLocal, setSettings }) {
         <div>
           <label style={labelStyle}>BACKGROUND PATTERN</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 8 }}>
-            {[['grid','Grid'],['dots','Dots'],['lines','Lines'],['circuit','Circuit'],['none','None']].map(([val,lbl]) => {
+            {[['grid','Grid'],['dots','Dots'],['lines','Lines'],['circuit','Circuit'],['diagonal','Diagonal'],['crosshatch','Cross'],['mesh','Aurora'],['carbon','Carbon'],['scanlines','CRT'],['waves','Waves'],['starfield','Stars'],['none','None']].map(([val,lbl]) => {
               const active = (ui.backgroundPattern||'grid') === val;
               return (
                 <button key={val} onClick={() => saveUi('backgroundPattern', val)} style={{

@@ -99,16 +99,42 @@ const useStore = create(
       wakeWordEnabled: false,
       setWakeWordEnabled(v) { set({ wakeWordEnabled: v }); },
 
+      // ── Agent mode (sticky, like VSCode's chat/agent switch) ───────────────────
+      // When agentMode is on, every message is sent as a coding-agent task bound to
+      // agentDir, and it stays on until the user switches back to chat.
+      agentMode: false,
+      setAgentMode(v) { set({ agentMode: v }); },
+
+      agentDir: '',
+      setAgentDir(v) { set({ agentDir: v }); },
+
       // ── Streaming ────────────────────────────────────────────────────────────
       streaming: false,
       streamingMsgId: null,
       setStreaming(v, msgId = null) { set({ streaming: v, streamingMsgId: msgId }); },
+
+      // ── Voice output (Zeus speaking) ───────────────────────────────────────────
+      speaking: false,
+      speakingMsgId: null,
+      setSpeaking(v, msgId = null) { set({ speaking: v, speakingMsgId: msgId }); },
+
+      // ── Composer (lifted so drag-and-drop can land anywhere in the window) ──────
+      draft: '',
+      setDraft(v) { set({ draft: typeof v === 'function' ? v(get().draft) : v }); },
+      pendingImage: null,
+      setPendingImage(v) { set({ pendingImage: v }); },
+
+      // ── UI sound effects ───────────────────────────────────────────────────────
+      soundEnabled: true,
+      setSoundEnabled(v) { set({ soundEnabled: v }); },
     }),
     {
       name: 'zeus-store-v1',
       partialize: s => ({
         conversations: s.conversations,
         sidebarOpen: s.sidebarOpen,
+        agentDir: s.agentDir,
+        soundEnabled: s.soundEnabled,
       }),
     }
   )

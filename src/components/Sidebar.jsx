@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import useStore from '../store/useStore.js';
+import { playSfx } from '../lib/sfx.js';
 
 const PROVIDER_LABELS = { anthropic: 'CLAUDE', openai: 'GPT', gemini: 'GEMINI', ollama: 'OLLAMA' };
 
@@ -60,7 +61,7 @@ export default function Sidebar() {
   const {
     conversations, activeId,
     newConversation, selectConversation, deleteConversation,
-    streaming,
+    streaming, soundEnabled, setSoundEnabled,
   } = useStore();
 
   const [search, setSearch] = useState('');
@@ -137,7 +138,20 @@ export default function Sidebar() {
           <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.1em' }}>
             ZEUS ONLINE
           </span>
-          <span style={{ color: 'var(--c-muted)', fontSize: '10px', marginLeft: 'auto' }}>
+          <button
+            className="btn-icon ml-auto w-6 h-6 rounded-md flex items-center justify-center"
+            onClick={() => { const n = !soundEnabled; setSoundEnabled(n); if (n) playSfx('toggle', true); }}
+            title={soundEnabled ? 'UI sounds on — click to mute' : 'UI sounds off — click to enable'}
+            style={{ color: soundEnabled ? 'var(--c-accent)' : 'var(--c-muted)' }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              {soundEnabled
+                ? <><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M19 5a9 9 0 0 1 0 14" /></>
+                : <><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></>}
+            </svg>
+          </button>
+          <span style={{ color: 'var(--c-muted)', fontSize: '10px' }}>
             {conversations.length} conv{conversations.length !== 1 ? 's' : ''}
           </span>
         </div>

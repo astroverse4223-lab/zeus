@@ -8,7 +8,10 @@ import Sidebar from './components/Sidebar.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import Settings from './components/Settings.jsx';
 import AgentLauncher from './components/AgentLauncher.jsx';
+import BootSequence from './components/BootSequence.jsx';
 import useWakeWord from './hooks/useWakeWord.js';
+import { speak, stopSpeaking } from './lib/speech.js';
+import { playSfx } from './lib/sfx.js';
 
 export default function App() {
   const {
@@ -27,6 +30,7 @@ export default function App() {
   const handleSendRef = useRef(null);
 
   const [agentLauncherOpen, setAgentLauncherOpen] = useState(false);
+  const [booting, setBooting] = useState(true);
 
   // Load settings on mount — window.zeus only exists inside Electron
   useEffect(() => {
@@ -66,8 +70,13 @@ export default function App() {
   }, [settings?.ui]);
 
   // Send a message to the AI
-  const handleSend = useCallback(async (text, imageBase64 = null, agentMode = false) => {
+  const handleSend = useCallback(async (text, imageBase64 = null, agentMode = false, agentDir = '') => {
     if (!text.trim() || streaming) return;
+
+    // Stop any in-progress speech the moment the user sends something new
+    stopSpeaking();
+    useStore.getState().setSpeaking(false, null);
+    playSfx('send');
 
     const s = useStore.getState().settings;
     const { fastMode } = useStore.getState();
@@ -167,6 +176,7 @@ export default function App() {
       }
 
       if (chunk.type === 'tool_start') {
+        playSfx('tool');
         updateMessage(convId, aiMsgId, {
           toolActivities: [
             ...(useStore.getState().conversations
@@ -209,6 +219,7 @@ export default function App() {
       }
 
       if (chunk.type === 'error') {
+        playSfx('error');
         updateMessage(convId, aiMsgId, {
           content: `⚠ Error: ${chunk.error}`,
           isStreaming: false,
@@ -221,6 +232,40 @@ export default function App() {
         updateMessage(convId, aiMsgId, { isStreaming: false });
         setStreaming(false, null);
         useStore.getState().setConvMeta(convId, { provider, model });
+
+        const st = useStore.getState();
+        const conv = st.conversations.find(c => c.id === convId);
+        const content = conv?.messages.find(m => m.id === aiMsgId)?.content || '';
+        if (content.trim()) playSfx('receive');
+
+        // Read the reply aloud if auto-speak is enabled
+        const voice = st.settings?.voice;
+        if (voice?.autoSpeak && content.trim()) {
+          st.setSpeaking(true, aiMsgId);
+          speak(content, { rate: voice.rate, pitch: voice.pitch }, {
+            onEnd: () => useStore.getState().setSpeaking(false, null),
+          });
+        }
+
+        // Auto-name the conversation from its first exchange (one-time, via a cheap model call)
+        if (conv && !conv.autoTitled && window.zeus?.generateTitle) {
+          const userMsg = conv.messages.find(m => m.role === 'user');
+          if (userMsg && content.trim()) {
+            const sNow = st.settings;
+            const prov = sNow?.activeProvider || 'anthropic';
+            const cfg = sNow?.providers?.[prov] || {};
+            window.zeus.generateTitle({
+              provider: prov,
+              model: FAST_MODELS[prov] || cfg.model || '',
+              apiKey: cfg.apiKey || '',
+              baseURL: cfg.baseURL || '',
+              prompt: `User: ${String(userMsg.content).slice(0, 300)}\nAssistant: ${content.slice(0, 300)}`,
+            }).then(title => {
+              const clean = (title || '').replace(/^["']|["']$/g, '').trim();
+              useStore.getState().setConvMeta(convId, clean ? { title: clean.slice(0, 60), autoTitled: true } : { autoTitled: true });
+            }).catch(() => {});
+          }
+        }
       }
     });
 
@@ -234,7 +279,8 @@ export default function App() {
         apiKey,
         baseURL,
         imageBase64: imageBase64 || undefined,
-        agentMode: agentMode || undefined,
+        agentMode: !!agentMode, // explicit boolean — backend trusts the UI's sticky toggle
+        agentDir: agentDir || undefined,
       });
     } catch (err) {
       updateMessage(convId, aiMsgId, {
@@ -266,28 +312,51 @@ export default function App() {
     return unsub;
   }, []);
 
+  // File changes (agent writes/patches/deletes) get attached to the active reply so
+  // MessageBubble can show diffs + an undo button per file.
+  useEffect(() => {
+    if (!window.zeus?.onFileChange) return;
+    const unsub = window.zeus.onFileChange((fc) => {
+      const st = useStore.getState();
+      const convId = st.activeId;
+      const msgId = st.streamingMsgId;
+      if (!convId || !msgId) return;
+      const msg = st.conversations.find(c => c.id === convId)?.messages.find(m => m.id === msgId);
+      if (!msg) return;
+      st.updateMessage(convId, msgId, { fileChanges: [...(msg.fileChanges || []), fc] });
+    });
+    return unsub;
+  }, []);
+
   const handleStop = useCallback(() => {
     if (streamIdRef.current) {
       window.zeus?.cancelStream(streamIdRef.current);
       streamIdRef.current = null;
     }
     if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
+    stopSpeaking();
     const state = useStore.getState();
     if (state.streamingMsgId && state.activeId) {
       state.updateMessage(state.activeId, state.streamingMsgId, { isStreaming: false });
     }
+    state.setSpeaking(false, null);
     setStreaming(false, null);
   }, [setStreaming]);
 
   const handleAgentLaunch = useCallback((agentPrompt) => {
     // Always start a fresh conversation — mixing agent tasks with old chat history
     // confuses the model and breaks agent-mode detection.
+    const dir = useStore.getState().agentDir;
     useStore.getState().newConversation();
-    setTimeout(() => handleSend(agentPrompt, null, true), 50);
+    setTimeout(() => handleSend(agentPrompt, null, true, dir), 50);
   }, [handleSend]);
 
   return (
     <div className="flex flex-col w-full h-full zeus-bg overflow-hidden">
+      <AnimatePresence>
+        {booting && <BootSequence key="boot" onDone={() => setBooting(false)} />}
+      </AnimatePresence>
+
       <HUD />
 
       <div className="flex flex-1 overflow-hidden">
@@ -317,7 +386,14 @@ export default function App() {
           <AgentLauncher
             key="agent-launcher"
             onClose={() => setAgentLauncherOpen(false)}
-            onLaunch={(prompt) => { setAgentLauncherOpen(false); handleAgentLaunch(prompt); }}
+            onLaunch={({ directory, prompt }) => {
+              setAgentLauncherOpen(false);
+              // Bind the UI to this directory and turn the sticky agent toggle ON so
+              // every following message keeps working on the same project.
+              useStore.getState().setAgentDir(directory);
+              useStore.getState().setAgentMode(true);
+              if (prompt) handleAgentLaunch(prompt);
+            }}
           />
         )}
       </AnimatePresence>

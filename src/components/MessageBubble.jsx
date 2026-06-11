@@ -4,6 +4,9 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ToolActivity from './ToolActivity.jsx';
+import FileChanges from './FileChanges.jsx';
+import useStore from '../store/useStore.js';
+import { speak, stopSpeaking } from '../lib/speech.js';
 
 const CopyButton = ({ text }) => {
   const [copied, setCopied] = useState(false);
@@ -212,6 +215,17 @@ export default function MessageBubble({ message }) {
   const [msgCopied, setMsgCopied] = useState(false);
   const [finishedAt, setFinishedAt] = useState(null);
 
+  const { speakingMsgId, setSpeaking, settings } = useStore();
+  const isThisSpeaking = speakingMsgId === message.id;
+  const speakThis = () => {
+    if (isThisSpeaking) { stopSpeaking(); setSpeaking(false, null); return; }
+    const v = settings?.voice || {};
+    setSpeaking(true, message.id);
+    speak(message.content, { rate: v.rate, pitch: v.pitch }, {
+      onEnd: () => useStore.getState().setSpeaking(false, null),
+    });
+  };
+
   // Capture the elapsed time the moment streaming ends
   const wasStreaming = useRef(false);
   useEffect(() => {
@@ -276,6 +290,23 @@ export default function MessageBubble({ message }) {
               {finishedAt < 60 ? `${finishedAt}s` : `${Math.floor(finishedAt/60)}m${finishedAt%60}s`}
             </span>
           )}
+          {/* Read aloud */}
+          {!isUser && message.content && !message.isStreaming && (
+            <button
+              onClick={speakThis}
+              className="btn-icon"
+              style={{ padding: '1px 4px', color: isThisSpeaking ? '#10de96' : 'var(--c-muted)' }}
+              title={isThisSpeaking ? 'Stop speaking' : 'Read aloud'}
+            >
+              {isThisSpeaking ? (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+              ) : (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Thinking bar — shows while streaming */}
@@ -287,6 +318,13 @@ export default function MessageBubble({ message }) {
         {!isUser && message.toolActivities?.length > 0 && (
           <div className="w-full mb-1">
             <ToolActivity activities={message.toolActivities} />
+          </div>
+        )}
+
+        {/* File changes with diffs + undo (agent edits) */}
+        {!isUser && message.fileChanges?.length > 0 && (
+          <div className="w-full mb-1">
+            <FileChanges changes={message.fileChanges} />
           </div>
         )}
 

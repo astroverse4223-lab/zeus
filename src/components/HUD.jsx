@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import useStore from '../store/useStore.js';
+import { stopSpeaking } from '../lib/speech.js';
 
 const BoltIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="bolt-icon">
@@ -38,7 +39,18 @@ export const FAST_MODEL_LABELS = {
 };
 
 export default function HUD() {
-  const { settings, settingsOpen, setSettingsOpen, sidebarOpen, setSidebarOpen, streaming, fastMode, setFastMode, wakeWordEnabled, setWakeWordEnabled } = useStore();
+  const { settings, setSettings, settingsOpen, setSettingsOpen, sidebarOpen, setSidebarOpen, streaming, fastMode, setFastMode, wakeWordEnabled, setWakeWordEnabled, speaking, setSpeaking } = useStore();
+
+  const autoSpeak = !!settings?.voice?.autoSpeak;
+  const handleVoiceClick = () => {
+    // While Zeus is talking, a click stops him immediately.
+    if (speaking) { stopSpeaking(); setSpeaking(false, null); return; }
+    // Otherwise toggle the persistent auto-speak setting.
+    if (!settings) return;
+    const updated = { ...settings, voice: { ...(settings.voice || {}), autoSpeak: !autoSpeak } };
+    setSettings(updated);
+    window.zeus?.saveSettings(updated);
+  };
   const [stats, setStats] = useState({ cpu: 0, ram: 0, ramUsed: '0', ramTotal: '0', battery: null });
   const [time, setTime] = useState(new Date());
 
@@ -117,6 +129,40 @@ export default function HUD() {
           fontSize: '9px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em',
           color: wakeWordEnabled ? '#00ff88' : 'var(--c-muted)',
         }}>MIC</span>
+      </button>
+
+      {/* Voice output (Zeus speaks) */}
+      <button
+        className="titlebar-nodrag flex items-center gap-1 rounded-lg px-2 py-1 transition-all"
+        onClick={handleVoiceClick}
+        title={speaking ? 'Zeus is speaking — click to stop'
+          : autoSpeak ? 'Voice ON — Zeus reads replies aloud · click to mute'
+          : 'Voice OFF — click to have Zeus read replies aloud'}
+        style={{
+          border: `1px solid ${speaking ? 'rgba(16,222,150,0.55)' : autoSpeak ? 'rgba(16,222,150,0.4)' : 'var(--c-border)'}`,
+          background: speaking ? 'rgba(16,222,150,0.12)' : autoSpeak ? 'rgba(16,222,150,0.06)' : 'transparent',
+          cursor: 'pointer',
+        }}
+      >
+        {speaking ? (
+          <div className="flex items-end gap-0.5" style={{ height: 11 }}>
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="eq-bar" style={{ animationDelay: `${i * 0.12}s`, height: `${7 + (i % 2) * 4}px` }} />
+            ))}
+          </div>
+        ) : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+            stroke={autoSpeak ? '#10de96' : 'var(--c-muted)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            {autoSpeak
+              ? <><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></>
+              : <><line x1="22" y1="9" x2="16" y2="15" /><line x1="16" y1="9" x2="22" y2="15" /></>}
+          </svg>
+        )}
+        <span style={{
+          fontSize: '9px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em',
+          color: (speaking || autoSpeak) ? '#10de96' : 'var(--c-muted)',
+        }}>{speaking ? 'SPEAKING' : 'VOICE'}</span>
       </button>
 
       {/* Mini-HUD toggle */}

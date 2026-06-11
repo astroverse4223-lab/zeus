@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('zeus', {
   // AI messaging
   sendMessage: (params) => ipcRenderer.invoke('zeus:ai-message', params),
   cancelStream: (id)    => ipcRenderer.send('zeus:cancel-stream', id),
+  generateTitle: (params) => ipcRenderer.invoke('zeus:generate-title', params),
 
   // Stream chunk listener — returns an unsubscribe fn
   onChunk: (cb) => {
@@ -56,6 +57,15 @@ contextBridge.exposeInMainWorld('zeus', {
     ipcRenderer.on('zeus:terminal-log', handler);
     return () => ipcRenderer.removeListener('zeus:terminal-log', handler);
   },
+
+  // Agent file-change tracking (diffs + undo)
+  onFileChange: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('zeus:file-change', handler);
+    return () => ipcRenderer.removeListener('zeus:file-change', handler);
+  },
+  getFileChangeDiff: (id) => ipcRenderer.invoke('zeus:file-change-diff', id),
+  undoFileChange:    (id) => ipcRenderer.invoke('zeus:undo-file-change', id),
 
   // Screen capture (vision / screen awareness)
   captureScreen: () => ipcRenderer.invoke('zeus:capture-screen'),

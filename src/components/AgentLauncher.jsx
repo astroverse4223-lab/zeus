@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import useStore from '../store/useStore.js';
 
 const LANGUAGES = [
   { id: 'auto',       label: 'Auto-detect', hint: '🔍' },
@@ -24,12 +25,16 @@ The working directory snapshot is attached. Call write_file for the first file R
 }
 
 export default function AgentLauncher({ onLaunch, onClose }) {
+  const rememberedDir = useStore(s => s.agentDir);
   const [task, setTask]         = useState('');
-  const [directory, setDirectory] = useState('');
+  const [directory, setDirectory] = useState(rememberedDir || '');
   const [language, setLanguage] = useState('auto');
   const [browsing, setBrowsing] = useState(false);
 
-  const canLaunch = task.trim().length > 0 && directory.trim().length > 0;
+  // A directory is all that's required — the task is optional. With just a directory we
+  // turn on sticky agent mode and you type tasks in the normal input bar; with a task we
+  // also kick off the first job immediately.
+  const canLaunch = directory.trim().length > 0;
 
   const browseDir = async () => {
     setBrowsing(true);
@@ -43,7 +48,9 @@ export default function AgentLauncher({ onLaunch, onClose }) {
 
   const launch = () => {
     if (!canLaunch) return;
-    onLaunch(buildAgentPrompt(task.trim(), directory.trim(), language));
+    const dir = directory.trim();
+    const t = task.trim();
+    onLaunch({ directory: dir, prompt: t ? buildAgentPrompt(t, dir, language) : null });
   };
 
   // Esc closes the modal; Ctrl/Cmd+Enter launches from anywhere in the modal.
@@ -122,12 +129,12 @@ export default function AgentLauncher({ onLaunch, onClose }) {
               className="font-orbitron tracking-widest"
               style={{ color: 'var(--c-muted)', fontSize: '10px', letterSpacing: '0.12em' }}
             >
-              TASK *
+              FIRST TASK <span style={{ opacity: 0.6 }}>(optional)</span>
             </label>
             <textarea
               className="zeus-input w-full rounded-xl px-4 py-3"
               rows={4}
-              placeholder={`Describe what you want to build or fix...\n\nExamples:\n• Build a REST API with Express + SQLite for a todo list\n• Add dark mode toggle to this React app\n• Fix the authentication bug in auth.py`}
+              placeholder={`Optional — describe a first task, or leave blank and just turn on agent mode...\n\nExamples:\n• Build a REST API with Express + SQLite for a todo list\n• Add dark mode toggle to this React app\n• Fix the authentication bug in auth.py`}
               value={task}
               onChange={e => setTask(e.target.value)}
               style={{ fontSize: '13px', lineHeight: 1.65, resize: 'vertical', minHeight: '110px' }}
@@ -228,7 +235,7 @@ export default function AgentLauncher({ onLaunch, onClose }) {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
               </svg>
-              LAUNCH AGENT
+              {task.trim() ? 'LAUNCH TASK' : 'ENABLE AGENT'}
             </motion.button>
           </div>
 
