@@ -37,12 +37,10 @@ const MODELS = {
   ],
 };
 
-export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onToggleTerminal }) {
+export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, onToggleTerminal }) {
   const { settings, setSettings, streaming, fastMode } = useStore();
   const [text, setText] = useState('');
   const [listening, setListening] = useState(false);
-  const [mode, setMode] = useState('chat'); // 'chat' | 'agent'
-  const [agentDir, setAgentDir] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // base64 dataURL
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -64,38 +62,16 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
   // Focus on mount
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
-  const browseAgentDir = async () => {
-    const dir = await window.zeus?.pickDirectory();
-    if (dir) setAgentDir(dir);
-  };
-
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
-    if (mode === 'agent' && onAgent) {
-      // If the active conversation already has an agent task running, treat this as a
-      // chat follow-up (e.g. "continue") rather than spawning a brand-new agent session.
-      const activeConv = useStore.getState().getActive();
-      const isExistingAgent = activeConv?.messages?.some(m =>
-        m.role === 'user' && typeof m.content === 'string' &&
-        m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
-      );
-      if (isExistingAgent) {
-        onSend(trimmed, pendingImage);
-      } else {
-        const dir = agentDir.trim();
-        if (!dir) { alert('Set a working directory for agent mode.'); return; }
-        const prompt = `[ZEUS CODING AGENT — ACTIVATED]\n\nTask: ${trimmed}\nWorking Directory: ${dir}\n\nCall write_file for the first file RIGHT NOW. Do not output any text, explanations, or plans. Every file must be written via write_file tool calls — text output does NOT save files. Call task_complete when done.`;
-        onAgent(prompt);
-        setMode('chat');
-      }
-    } else {
-      onSend(trimmed, pendingImage);
-    }
+    // Agent conversations are auto-detected by the backend from the activation message
+    // in history, so follow-ups ("continue", corrections) just send as normal chat.
+    onSend(trimmed, pendingImage);
     setText('');
     setPendingImage(null);
     textareaRef.current?.focus();
-  }, [text, streaming, onSend, onAgent, mode, pendingImage, agentDir]);
+  }, [text, streaming, onSend, pendingImage]);
 
   const captureScreen = useCallback(async () => {
     const dataUrl = await window.zeus?.captureScreen();
@@ -159,38 +135,28 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
     >
       {/* Model selector row */}
       <div className="flex items-center gap-2 mb-2 px-1">
-        {/* Chat / Agent mode toggle */}
-        <div
-          className="flex items-center rounded-lg flex-shrink-0"
-          style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', padding: '2px' }}
+        {/* Coding Agent launcher */}
+        <button
+          onClick={onOpenAgent}
+          disabled={streaming}
+          className="flex items-center gap-1.5 rounded-lg flex-shrink-0 agent-launch-btn"
+          style={{
+            padding: '4px 11px',
+            background: 'linear-gradient(135deg, rgba(124,58,237,0.18), rgba(168,85,247,0.14))',
+            border: '1px solid rgba(168,85,247,0.45)',
+            color: 'var(--c-purple)',
+            fontFamily: 'Orbitron, sans-serif', fontSize: '10px', letterSpacing: '0.08em', fontWeight: 600,
+            cursor: streaming ? 'default' : 'pointer',
+            opacity: streaming ? 0.5 : 1,
+            transition: 'all 0.15s',
+          }}
+          title="Launch the coding agent — autonomously reads, writes, runs & fixes code"
         >
-          <button
-            onClick={() => setMode('chat')}
-            style={{
-              padding: '3px 9px', borderRadius: '6px', fontSize: '10px', cursor: 'pointer', border: 'none',
-              fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em', transition: 'all 0.15s',
-              background: mode === 'chat' ? 'var(--c-accent)' : 'transparent',
-              color: mode === 'chat' ? '#080c14' : 'var(--c-muted)',
-              fontWeight: mode === 'chat' ? 700 : 400,
-              boxShadow: mode === 'chat' ? '0 0 8px rgba(0,212,255,0.4)' : 'none',
-            }}
-          >
-            CHAT
-          </button>
-          <button
-            onClick={() => setMode('agent')}
-            style={{
-              padding: '3px 9px', borderRadius: '6px', fontSize: '10px', cursor: 'pointer', border: 'none',
-              fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em', transition: 'all 0.15s',
-              background: mode === 'agent' ? 'var(--c-purple)' : 'transparent',
-              color: mode === 'agent' ? '#fff' : 'var(--c-muted)',
-              fontWeight: mode === 'agent' ? 700 : 400,
-              boxShadow: mode === 'agent' ? '0 0 8px rgba(168,85,247,0.4)' : 'none',
-            }}
-          >
-            AGENT
-          </button>
-        </div>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+          </svg>
+          AGENT
+        </button>
 
         <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em' }}>
           MODEL
@@ -262,27 +228,6 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
         </span>
       </div>
 
-      {/* Agent directory row */}
-      {mode === 'agent' && (
-        <div className="flex items-center gap-2 mb-2 px-1">
-          <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em', flexShrink: 0 }}>DIR</span>
-          <input
-            type="text"
-            className="flex-1 rounded-lg px-3 py-1.5 outline-none"
-            style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px' }}
-            placeholder="C:\Users\you\projects\myapp"
-            value={agentDir}
-            onChange={e => setAgentDir(e.target.value)}
-          />
-          <button
-            className="btn-ghost rounded-lg px-3 py-1.5 flex-shrink-0"
-            style={{ fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em' }}
-            onClick={browseAgentDir}
-            type="button"
-          >BROWSE</button>
-        </div>
-      )}
-
       {/* Input row */}
       <div
         className="flex items-end gap-2 rounded-xl p-2 glow-border"
@@ -299,7 +244,6 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
           }}
           placeholder={
             streaming ? 'Zeus is thinking…'
-            : mode === 'agent' ? 'Describe a coding task — Zeus will read, write and edit files autonomously…'
             : 'Ask Zeus anything, or command your PC…'
           }
           value={text}
@@ -406,31 +350,21 @@ export default function InputBar({ onSend, onStop, onAgent, terminalOpen, onTogg
             className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center"
             onClick={handleSend}
             disabled={!text.trim()}
-            title={mode === 'agent' ? 'Launch agent (Enter)' : 'Send (Enter)'}
+            title="Send (Enter)"
             style={{
               opacity: text.trim() ? 1 : 0.4,
               cursor: text.trim() ? 'pointer' : 'default',
               border: 'none',
-              background: mode === 'agent'
-                ? 'linear-gradient(135deg, #7c3aed, #a855f7)'
-                : 'linear-gradient(135deg, var(--c-accent2), var(--c-accent))',
-              boxShadow: text.trim()
-                ? mode === 'agent' ? '0 0 14px rgba(168,85,247,0.45)' : '0 0 14px rgba(0,212,255,0.35)'
-                : 'none',
+              background: 'linear-gradient(135deg, var(--c-accent2), var(--c-accent))',
+              boxShadow: text.trim() ? '0 0 14px rgba(0,212,255,0.35)' : 'none',
               color: '#fff',
               transition: 'background 0.2s, box-shadow 0.2s',
             }}
           >
-            {mode === 'agent' ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <line x1="22" y1="2" x2="11" y2="13"/>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-              </svg>
-            )}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
           </button>
         )}
       </div>

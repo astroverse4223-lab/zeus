@@ -7,6 +7,7 @@ import HUD, { FAST_MODELS } from './components/HUD.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import Settings from './components/Settings.jsx';
+import AgentLauncher from './components/AgentLauncher.jsx';
 import useWakeWord from './hooks/useWakeWord.js';
 
 export default function App() {
@@ -24,6 +25,8 @@ export default function App() {
   const unsubRef = useRef(null);
   const streamIdRef = useRef(null);
   const handleSendRef = useRef(null);
+
+  const [agentLauncherOpen, setAgentLauncherOpen] = useState(false);
 
   // Load settings on mount — window.zeus only exists inside Electron
   useEffect(() => {
@@ -190,7 +193,14 @@ export default function App() {
         if (!aiM) return;
         const acts = [...(aiM.toolActivities || [])];
         const idx = acts.findLastIndex(a => a.tool === chunk.tool && a.status === 'running');
-        if (idx >= 0) acts[idx] = { ...acts[idx], status: 'done', result: chunk.result };
+        // Drop heavy screenshot base64 — it's shown via the dedicated `screenshot` chunk
+        // and stored on message.screenshot, so keeping it here just bloats persisted storage.
+        let result = chunk.result;
+        if (result && typeof result === 'object' && result.dataUrl) {
+          const { dataUrl, ...rest } = result;
+          result = rest;
+        }
+        if (idx >= 0) acts[idx] = { ...acts[idx], status: 'done', result };
         updateMessage(convId, aiMsgId, { toolActivities: acts });
       }
 
@@ -297,9 +307,20 @@ export default function App() {
         </AnimatePresence>
 
         <div className="flex-1 flex flex-col overflow-hidden relative">
-          <ChatWindow onSend={handleSend} onStop={handleStop} onAgent={handleAgentLaunch} />
+          <ChatWindow onSend={handleSend} onStop={handleStop} onOpenAgent={() => setAgentLauncherOpen(true)} />
         </div>
       </div>
+
+      {/* Coding Agent launcher modal */}
+      <AnimatePresence>
+        {agentLauncherOpen && (
+          <AgentLauncher
+            key="agent-launcher"
+            onClose={() => setAgentLauncherOpen(false)}
+            onLaunch={(prompt) => { setAgentLauncherOpen(false); handleAgentLaunch(prompt); }}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {settingsOpen && (

@@ -1488,7 +1488,14 @@ async function executeTool(name, input, requireConfirm) {
 function safeToolResult(result, maxLen = 12000) {
   try {
     if (result === null || result === undefined) return '{"error":"No result returned"}';
-    const str = JSON.stringify(result);
+    // Strip heavy binary fields (e.g. screenshot dataUrls) before serializing.
+    // The raw base64 would bloat the context by ~12 KB and get truncated anyway —
+    // the model can't read truncated base64, and the image is shown to the user separately.
+    let toSerialize = result;
+    if (result && typeof result === 'object' && typeof result.dataUrl === 'string') {
+      toSerialize = { ...result, dataUrl: '[image captured and shown to the user]' };
+    }
+    const str = JSON.stringify(toSerialize);
     if (!str || str === 'undefined') return '{"error":"Result could not be serialized"}';
     if (str.length <= maxLen) return str;
     return str.slice(0, maxLen) + '... [truncated — output too large]';
@@ -1889,14 +1896,20 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
 
   const AGENT_MAX_ITERS_OAI = 300;
 
+  // Reasoning models (o1, o3, o4…) reject `temperature` and use `max_completion_tokens`
+  // instead of `max_tokens`. Sending the chat-model params returns a 400 and breaks the call.
+  const isReasoningModel = /^o\d/i.test(model || '');
+  const tokenBudget = currentAgentMode ? 16384 : (settings?.chat?.maxTokens || 4096);
+
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OAI) {
     const streamParams = {
       model: model || 'gpt-4o',
       messages: msgs,
       tools: toOpenAITools(currentAgentMode ? AGENT_TOOLS : TOOLS),
       stream: true,
-      temperature: settings?.chat?.temperature ?? 0.7,
-      max_tokens: currentAgentMode ? 16384 : (settings?.chat?.maxTokens || 4096),
+      ...(isReasoningModel
+        ? { max_completion_tokens: tokenBudget }
+        : { temperature: settings?.chat?.temperature ?? 0.7, max_tokens: tokenBudget }),
     };
     if (currentAgentMode) streamParams.tool_choice = 'required';
 
@@ -2001,7 +2014,10 @@ async function runGemini(sender, streamId, state, messages, model, apiKey, image
 
   const gemModel = genAI.getGenerativeModel({
     model: model || 'gemini-1.5-pro',
-    tools: toGeminiTools(TOOLS),
+    tools: toGeminiTools(currentAgentMode ? AGENT_TOOLS : TOOLS),
+    // In agent mode force a function call each turn so Gemini behaves like the
+    // other providers (which use tool_choice:any / 'required') instead of replying with text.
+    toolConfig: currentAgentMode ? { functionCallingConfig: { mode: 'ANY' } } : undefined,
     systemInstruction: getZeusSystem(),
     generationConfig: {
       temperature: settings?.chat?.temperature ?? 0.7,

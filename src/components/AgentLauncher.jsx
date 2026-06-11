@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 
 const LANGUAGES = [
   { id: 'auto',       label: 'Auto-detect', hint: '🔍' },
@@ -45,6 +45,16 @@ export default function AgentLauncher({ onLaunch, onClose }) {
     if (!canLaunch) return;
     onLaunch(buildAgentPrompt(task.trim(), directory.trim(), language));
   };
+
+  // Esc closes the modal; Ctrl/Cmd+Enter launches from anywhere in the modal.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); launch(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, canLaunch, task, directory, language]);
 
   return (
     <motion.div
@@ -179,7 +189,7 @@ export default function AgentLauncher({ onLaunch, onClose }) {
                     fontWeight: language === l.id ? '600' : '400',
                   }}
                 >
-                  {l.hint !== '🔍' ? l.hint : '🔍'}&nbsp;{l.label}
+                  {l.hint}&nbsp;{l.label}
                 </button>
               ))}
             </div>
@@ -221,6 +231,11 @@ export default function AgentLauncher({ onLaunch, onClose }) {
               LAUNCH AGENT
             </motion.button>
           </div>
+
+          {/* Keyboard hint */}
+          <p style={{ color: 'var(--c-muted)', fontSize: '10px', textAlign: 'center', marginTop: -6 }}>
+            <kbd style={{ fontFamily: 'JetBrains Mono, monospace' }}>Ctrl</kbd>+<kbd style={{ fontFamily: 'JetBrains Mono, monospace' }}>Enter</kbd> to launch · <kbd style={{ fontFamily: 'JetBrains Mono, monospace' }}>Esc</kbd> to cancel
+          </p>
         </div>
       </motion.div>
     </motion.div>

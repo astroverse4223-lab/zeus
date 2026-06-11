@@ -94,7 +94,7 @@ function WelcomeScreen({ onSend }) {
   );
 }
 
-export default function ChatWindow({ onSend, onStop, onAgent }) {
+export default function ChatWindow({ onSend, onStop, onOpenAgent }) {
   const { getActive, streaming, streamingMsgId } = useStore();
   const conversation = getActive();
   const messages = conversation?.messages || [];
@@ -187,7 +187,7 @@ export default function ChatWindow({ onSend, onStop, onAgent }) {
         )}
       </AnimatePresence>
 
-      <InputBar onSend={onSend} onStop={onStop} onAgent={onAgent} terminalOpen={terminalOpen} onToggleTerminal={() => setTerminalOpen(v => !v)} />
+      <InputBar onSend={onSend} onStop={onStop} onOpenAgent={onOpenAgent} terminalOpen={terminalOpen} onToggleTerminal={() => setTerminalOpen(v => !v)} />
     </div>
   );
 }
