@@ -66,6 +66,44 @@ const mdComponents = {
 
 const PROVIDER_LABELS = { anthropic: 'CLAUDE', openai: 'GPT-4o', gemini: 'GEMINI', ollama: 'OLLAMA' };
 
+function parseAgentContent(content) {
+  if (!content || !content.startsWith('[ZEUS CODING AGENT — ACTIVATED]')) return null;
+  const taskMatch = content.match(/Task:\s*([\s\S]+?)(?:\nWorking Directory:|$)/);
+  const dirMatch = content.match(/Working Directory:\s*(.+?)(?:\n|$)/);
+  const langMatch = content.match(/Language\/Framework:\s*(.+?)(?:\n|$)/);
+  return {
+    task: taskMatch?.[1]?.trim() || '',
+    directory: dirMatch?.[1]?.trim() || '',
+    language: langMatch?.[1]?.trim() || null,
+  };
+}
+
+const UserContent = ({ content }) => {
+  const agentData = parseAgentContent(content);
+  if (agentData) {
+    return (
+      <div>
+        <div style={{ fontSize: '9px', fontFamily: 'Orbitron, sans-serif', color: 'var(--c-purple)', letterSpacing: '0.12em', marginBottom: 6, opacity: 0.85 }}>
+          ⚡ AGENT TASK
+        </div>
+        <p style={{ color: 'var(--c-text)', fontSize: 'var(--c-chat-font)', lineHeight: '1.6', whiteSpace: 'pre-wrap', margin: 0 }}>
+          {agentData.task}
+        </p>
+        {agentData.directory && (
+          <p style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'JetBrains Mono, monospace', marginTop: 6, marginBottom: 0 }}>
+            📁 {agentData.directory}{agentData.language ? ` · ${agentData.language}` : ''}
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <p style={{ color: 'var(--c-text)', fontSize: 'var(--c-chat-font)', lineHeight: '1.6', whiteSpace: 'pre-wrap', margin: 0 }}>
+      {content}
+    </p>
+  );
+};
+
 const TOOL_STATUS = {
   write_file:          'Writing file',
   read_file:           'Reading file',
@@ -280,9 +318,7 @@ export default function MessageBubble({ message }) {
             style={{ minWidth: '60px', padding: 'var(--c-msg-padding)' }}
           >
             {isUser ? (
-              <p style={{ color: 'var(--c-text)', fontSize: 'var(--c-chat-font)', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
-                {message.content}
-              </p>
+              <UserContent content={message.content} />
             ) : (
               <div className="md-content" style={{ fontSize: 'var(--c-chat-font)' }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>

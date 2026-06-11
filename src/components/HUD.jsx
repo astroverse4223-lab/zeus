@@ -60,10 +60,11 @@ export default function HUD() {
 
   const cpuColor = stats.cpu > 80 ? 'var(--c-red)' : stats.cpu > 60 ? 'var(--c-yellow)' : 'var(--c-accent)';
   const ramColor = stats.ram > 80 ? 'var(--c-red)' : stats.ram > 60 ? 'var(--c-yellow)' : 'var(--c-accent)';
+  const compact = !!settings?.ui?.hudCompact;
 
   return (
     <div
-      className="titlebar-drag flex items-center h-12 px-3 gap-3 flex-shrink-0"
+      className={`titlebar-drag flex items-center ${compact ? 'h-8 px-2 gap-2' : 'h-12 px-3 gap-3'} flex-shrink-0`}
       style={{
         background: 'linear-gradient(180deg, #0a0f1e 0%, #080c14 100%)',
         borderBottom: '1px solid var(--c-border)',
@@ -193,45 +194,47 @@ export default function HUD() {
 
       <div className="flex-1" />
 
-      {/* System Stats */}
+      {/* System Stats — hidden in compact mode */}
       <div className="flex items-center gap-4 titlebar-nodrag">
-        {/* CPU */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-mono" style={{ color: 'var(--c-muted)', fontSize: '10px' }}>CPU</span>
-          <StatBar value={stats.cpu} color={cpuColor} />
-          <span className="text-xs font-mono w-8 text-right" style={{ color: cpuColor, fontSize: '10px' }}>
-            {stats.cpu}%
-          </span>
-        </div>
-
-        {/* RAM */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-mono" style={{ color: 'var(--c-muted)', fontSize: '10px' }}>RAM</span>
-          <StatBar value={stats.ram} color={ramColor} />
-          <span className="text-xs font-mono w-14 text-right" style={{ color: ramColor, fontSize: '10px' }}>
-            {stats.ramUsed}/{stats.ramTotal}G
-          </span>
-        </div>
-
-        {/* Battery */}
-        {stats.battery && (
-          <div className="flex items-center gap-1" title="Battery">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              style={{ color: stats.battery.charging ? 'var(--c-green)' : 'var(--c-dim)' }}>
-              <rect x="2" y="7" width="18" height="10" rx="2" />
-              <path d="M22 11v2" strokeLinecap="round" />
-              <rect x="4" y="9" width={`${Math.round(stats.battery.level * 0.14)}`} height="6" rx="1" fill="currentColor" stroke="none" />
-            </svg>
-            <span style={{ color: 'var(--c-muted)', fontSize: '10px' }} className="font-mono">
-              {stats.battery.level}%
+        {!compact && <>
+          {/* CPU */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-mono" style={{ color: 'var(--c-muted)', fontSize: '10px' }}>CPU</span>
+            <StatBar value={stats.cpu} color={cpuColor} />
+            <span className="text-xs font-mono w-8 text-right" style={{ color: cpuColor, fontSize: '10px' }}>
+              {stats.cpu}%
             </span>
           </div>
-        )}
 
-        {/* Time */}
-        <span className="font-mono text-xs" style={{ color: 'var(--c-dim)', fontSize: '11px', letterSpacing: '0.05em' }}>
-          {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-        </span>
+          {/* RAM */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-mono" style={{ color: 'var(--c-muted)', fontSize: '10px' }}>RAM</span>
+            <StatBar value={stats.ram} color={ramColor} />
+            <span className="text-xs font-mono w-14 text-right" style={{ color: ramColor, fontSize: '10px' }}>
+              {stats.ramUsed}/{stats.ramTotal}G
+            </span>
+          </div>
+
+          {/* Battery */}
+          {stats.battery && (
+            <div className="flex items-center gap-1" title="Battery">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                style={{ color: stats.battery.charging ? 'var(--c-green)' : 'var(--c-dim)' }}>
+                <rect x="2" y="7" width="18" height="10" rx="2" />
+                <path d="M22 11v2" strokeLinecap="round" />
+                <rect x="4" y="9" width={`${Math.round(stats.battery.level * 0.14)}`} height="6" rx="1" fill="currentColor" stroke="none" />
+              </svg>
+              <span style={{ color: 'var(--c-muted)', fontSize: '10px' }} className="font-mono">
+                {stats.battery.level}%
+              </span>
+            </div>
+          )}
+
+          {/* Time */}
+          <span className="font-mono text-xs" style={{ color: 'var(--c-dim)', fontSize: '11px', letterSpacing: '0.05em' }}>
+            {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+        </>}
 
         {/* Settings */}
         <button

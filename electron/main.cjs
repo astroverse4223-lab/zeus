@@ -1103,8 +1103,15 @@ async function executeTool(name, input, requireConfirm) {
           cmd = `powershell -WindowStyle Hidden -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
         }
         const execOpts = { timeout, windowsHide: true, ...(cmdCwd ? { cwd: cmdCwd } : {}) };
-        const { stdout, stderr } = await execAsync(cmd, execOpts);
         const cap = 4000;
+        let stdout = '', stderr = '';
+        try {
+          ({ stdout, stderr } = await execAsync(cmd, execOpts));
+        } catch (execErr) {
+          // exec throws on non-zero exit — recover stdout/stderr so the agent can see the output
+          stdout = execErr.stdout || '';
+          stderr = execErr.stderr || execErr.message || '';
+        }
         const trimOut = stdout.trim();
         const trimErr = stderr.trim();
         return {
@@ -1547,20 +1554,25 @@ Important: Always explain what you're about to do. For destructive actions, conf
 }
 
 function getAgentSystem(workingDir) {
-  return `You are a file-writing coding agent. Your entire job is to call write_file for every file, then call task_complete.
+  return `You are a coding agent. Your job is to read the project structure if needed, write all required files completely, run install/build commands, and call task_complete.
 
 Working directory: ${workingDir || 'see task message'}
 
 ABSOLUTE RULES:
-1. Call write_file IMMEDIATELY — your very first action must be a write_file tool call. No text before it.
-2. One write_file call per file. Content must be COMPLETE working code — no TODOs, no placeholders, no ellipsis.
-3. Use absolute Windows paths: C:\\Users\\...\\project\\src\\index.js
-4. TEXT OUTPUT DOES NOTHING. Writing file content in text, JSON, XML, or code blocks does NOT create files. Only write_file creates files.
-5. Run installs and builds with run_command after writing files.
-6. Call task_complete when every file is written and the project is ready.
-7. Never stop. Never ask questions. Never output file contents as text. Just call write_file.
+1. Your very first action MUST be a tool call — zero text output before calling a tool.
+2. For new projects: call write_file immediately for the first file.
+   For existing projects or bug fixes: call get_directory_tree or read_file first to understand the code, then write_file or patch_file.
+3. One write_file call per file. Content must be COMPLETE working code — no TODOs, no placeholders, no ellipsis ("...").
+4. Use absolute Windows paths: C:\\Users\\...\\project\\src\\index.js
+5. TEXT OUTPUT DOES NOTHING. Writing file content as text, in code blocks, or in JSON does NOT create files. Only write_file and patch_file create/modify files.
+6. After reading existing code, immediately write or patch it — do not narrate what you found.
+7. Run installs and builds with run_command after writing all files. Check exit codes via stderr.
+8. Call task_complete when every file is written/patched and the project is ready.
+9. Never stop mid-task. Never ask questions. Never output file contents as text. Keep calling tools.
 
-Your only valid output pattern: write_file → write_file → write_file → run_command → task_complete.`;
+Valid patterns:
+  New project:     write_file → write_file → run_command → task_complete
+  Existing/fix:    get_directory_tree → read_file → patch_file/write_file → run_command → task_complete`;
 }
 
 function toAnthropicTools(tools) {
@@ -1927,7 +1939,16 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
       msgs = pruneMsgs(msgs);
     } else if (stopReason === 'tool_calls' || stopReason === 'stop') {
       const toolCalls = Object.values(tcAcc);
-      if (toolCalls.length === 0) break;
+      if (toolCalls.length === 0) {
+        if (currentAgentMode && agentContinues < 3 && !state.cancelled) {
+          agentContinues++;
+          msgs.push({ role: 'assistant', content: fullContent || '(working...)' });
+          msgs.push({ role: 'user', content: AGENT_CONTINUE_MSG });
+          msgs = pruneMsgs(msgs);
+          continue;
+        }
+        break;
+      }
 
       msgs.push({
         role: 'assistant',
@@ -1960,6 +1981,13 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
       if (taskDone) break;
       msgs = pruneMsgs(msgs);
     } else {
+      if (currentAgentMode && agentContinues < 3 && !state.cancelled) {
+        agentContinues++;
+        msgs.push({ role: 'assistant', content: fullContent || '(working...)' });
+        msgs.push({ role: 'user', content: AGENT_CONTINUE_MSG });
+        msgs = pruneMsgs(msgs);
+        continue;
+      }
       break;
     }
   }

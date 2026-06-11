@@ -242,13 +242,8 @@ export default function App() {
   useWakeWord({
     enabled: wakeWordEnabled,
     onWake: () => {
-      if (mainWindow) { /* focus is handled natively */ }
-      // Focus the textarea and show a notification
-      window.zeus?.sendMessage && document.querySelector('textarea')?.focus();
-      if (!streaming) {
-        // Flash the window to indicate wake
-        window.focus?.();
-      }
+      document.querySelector('textarea')?.focus();
+      if (!streaming) window.focus?.();
     },
   });
 
@@ -311,8 +306,8 @@ export default function App() {
           <motion.div
             key="settings"
             initial={{ opacity: 0, x: 40 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 40 }}
+            animate={{ opacity: 1, x: 0, pointerEvents: 'auto' }}
+            exit={{ opacity: 0, x: 40, pointerEvents: 'none' }}
             transition={{ duration: 0.25, ease: 'easeOut' }}
             className="absolute inset-y-0 right-0 w-[480px] z-50 settings-panel"
           >
