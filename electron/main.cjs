@@ -17,6 +17,9 @@ const execAsync = (cmd, opts = {}) => _execBase(cmd, { windowsHide: true, ...opt
 
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'zeus-settings.json');
 
+// ─── Auto-update ──────────────────────────────────────────────────────────────
+const updater = require('./update/index.cjs');
+
 const DEFAULT_SETTINGS = {
   providers: {
     anthropic: { apiKey: '', model: 'claude-opus-4-8',       enabled: true },
@@ -168,6 +171,20 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   Menu.setApplicationMenu(null);
+
+  // One-time update check a few seconds after launch (non-intrusive).
+  setTimeout(async () => {
+    try {
+      const r = await updater.checkForUpdate({ currentVersion: app.getVersion() });
+      const { Notification } = require('electron');
+      if (r && r.newer && Notification.isSupported()) {
+        new Notification({
+          title: '⚡ Zeus update available',
+          body: `Version ${r.latest} is available. Open Settings → Updates to download.`,
+        }).show();
+      }
+    } catch { /* ignore — never bother the user on a flaky network */ }
+  }, 5000);
 }
 
 app.whenReady().then(() => {
@@ -284,6 +301,29 @@ ipcMain.handle('zeus:pick-directory', async () => {
     title: 'ZEUS — Select Project Directory',
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+// ─── Auto-Update IPC ──────────────────────────────────────────────────────────
+ipcMain.handle('zeus:app-version', () => app.getVersion());
+
+ipcMain.handle('zeus:update-check', () => updater.checkForUpdate({ currentVersion: app.getVersion() }));
+
+ipcMain.handle('zeus:update-download', async (e, url) => {
+  if (!url) return { error: 'No download URL.' };
+  const wc = e.sender;
+  try {
+    const file = await updater.downloadUpdate(url, app.getPath('downloads'), (p) => {
+      if (!wc.isDestroyed()) wc.send('zeus:update-progress', p);
+    });
+    return { file };
+  } catch (err) {
+    return { error: 'Download failed — try again.' };
+  }
+});
+
+ipcMain.handle('zeus:reveal-file', (_, filePath) => {
+  if (filePath) shell.showItemInFolder(filePath);
+  return true;
 });
 
 // ─── Memory IPC ───────────────────────────────────────────────────────────────
