@@ -25,6 +25,8 @@
   --c-chat-font:   14px;
   --c-msg-padding: 12px 16px;
   --c-anim-speed:  0.25s;
+  --c-bg-anim-speed: 34s;
+  --c-bg-anim-play:  running;
 }
 
 /* ── Reset ──────────────────────────────────────────────────────────────────── */
@@ -58,10 +60,19 @@ html, body, #root {
     linear-gradient(var(--c-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--c-grid) 1px, transparent 1px);
   background-size: 40px 40px;
+  /* Continuous drift — speed/play driven by the Animation Speed setting.
+     Each pattern overrides animation-name below; panning by exactly one
+     tile keeps every loop seamless. */
+  animation-name: bgGrid;
+  animation-duration: var(--c-bg-anim-speed, 34s);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-play-state: var(--c-bg-anim-play, running);
 }
 [data-pattern="dots"] .zeus-bg {
   background-image: radial-gradient(circle, var(--c-grid) 1.5px, transparent 1.5px);
   background-size: 24px 24px;
+  animation-name: bgDots;
 }
 [data-pattern="lines"] .zeus-bg {
   background-image: repeating-linear-gradient(
@@ -69,6 +80,7 @@ html, body, #root {
     var(--c-grid) 38px, var(--c-grid) 39px
   );
   background-size: 100% 39px;
+  animation-name: bgLines;
 }
 [data-pattern="circuit"] .zeus-bg {
   background-image:
@@ -77,9 +89,11 @@ html, body, #root {
     radial-gradient(circle at 0 0, var(--c-grid) 2px, transparent 2px),
     radial-gradient(circle at 60px 60px, var(--c-grid) 2px, transparent 2px);
   background-size: 60px 60px, 60px 60px, 60px 60px, 60px 60px;
+  animation-name: bgCircuit;
 }
 [data-pattern="none"] .zeus-bg {
   background-image: none;
+  animation-name: none;
 }
 
 /* Diagonal grid */
@@ -87,6 +101,7 @@ html, body, #root {
   background-image:
     repeating-linear-gradient(45deg,  var(--c-grid) 0 1px, transparent 1px 40px),
     repeating-linear-gradient(-45deg, var(--c-grid) 0 1px, transparent 1px 40px);
+  animation-name: bgDiagonal;
 }
 
 /* Crosshatch */
@@ -94,6 +109,7 @@ html, body, #root {
   background-image:
     repeating-linear-gradient(45deg,  var(--c-grid) 0 1px, transparent 1px 13px),
     repeating-linear-gradient(-45deg, var(--c-grid) 0 1px, transparent 1px 13px);
+  animation-name: bgCrosshatch;
 }
 
 /* Aurora mesh — soft glowing blobs tinted by the active theme */
@@ -104,8 +120,12 @@ html, body, #root {
     radial-gradient(38% 46% at 88% 22%, var(--c-glow) 0%, transparent 58%),
     radial-gradient(48% 52% at 78% 88%, var(--c-glow-hi) 0%, transparent 60%),
     radial-gradient(34% 42% at 22% 82%, var(--c-glow) 0%, transparent 58%);
-  background-size: cover;
-  background-attachment: fixed;
+  background-size: 200% 200%;
+  /* Aurora blobs float around instead of tiling, so ease + alternate
+     reads better than a linear pan. */
+  animation-name: bgMesh;
+  animation-timing-function: ease-in-out;
+  animation-direction: alternate;
 }
 
 /* Carbon fibre weave */
@@ -117,17 +137,20 @@ html, body, #root {
     linear-gradient(315deg, var(--c-grid) 25%, transparent 25%);
   background-size: 18px 18px;
   background-position: 0 0, 9px 0, 9px -9px, 0 9px;
+  animation-name: bgCarbon;
 }
 
 /* CRT scanlines */
 [data-pattern="scanlines"] .zeus-bg {
   background-image: repeating-linear-gradient(0deg, var(--c-grid) 0 1px, transparent 1px 3px);
+  animation-name: bgScanlines;
 }
 
 /* Concentric waves */
 [data-pattern="waves"] .zeus-bg {
   background-image: repeating-radial-gradient(circle at 50% 120%, transparent 0 26px, var(--c-grid) 26px 27px);
   background-size: 64px 64px;
+  animation-name: bgWaves;
 }
 
 /* Starfield — scattered glints */
@@ -141,6 +164,7 @@ html, body, #root {
     radial-gradient(1.5px 1.5px at 60% 40%, var(--c-accent) 50%, transparent);
   background-size: 260px 260px;
   opacity: 1;
+  animation-name: bgStarfield;
 }
 
 /* ── Glassmorphism ──────────────────────────────────────────────────────────── */
@@ -220,6 +244,32 @@ html, body, #root {
 .anim-blink     { animation: blink 1s step-end infinite; }
 .anim-slide-in  { animation: slideIn  var(--c-anim-speed) ease-out; }
 .anim-tool-pop  { animation: toolPop  var(--c-anim-speed) ease-out; }
+
+/* ── Background pattern drift (driven by Animation Speed setting) ────────────── */
+/* Each pattern pans by exactly one tile so every loop is seamless. */
+@keyframes bgGrid       { to { background-position: 40px 40px; } }
+@keyframes bgDots       { to { background-position: 24px 24px; } }
+@keyframes bgLines      { to { background-position: 0 39px; } }
+@keyframes bgCircuit    { to { background-position: 60px 60px; } }
+@keyframes bgCarbon     { to { background-position: 18px 18px, 27px 18px, 27px 9px, 18px 27px; } }
+@keyframes bgScanlines  { to { background-position: 0 3px; } }       /* CRT roll */
+@keyframes bgDiagonal   { to { background-position: 56.5685px 0; } } /* 40px / cos45 */
+@keyframes bgCrosshatch { to { background-position: 18.3848px 0; } } /* 13px / cos45 */
+@keyframes bgWaves      { to { background-position: 0 -64px; } }     /* rings roll up */
+@keyframes bgStarfield {
+  0%   { background-position: 0 0;         opacity: 0.65; }
+  50%  {                                   opacity: 1; }     /* twinkle */
+  100% { background-position: 260px 260px; opacity: 0.65; }
+}
+@keyframes bgMesh {       /* aurora blobs drift across an oversized canvas */
+  from { background-position: 0% 50%; }
+  to   { background-position: 100% 50%; }
+}
+
+/* Respect the OS reduced-motion preference — park the perpetual drift. */
+@media (prefers-reduced-motion: reduce) {
+  .zeus-bg { animation-play-state: paused; }
+}
 
 /* ── Scan line overlay ──────────────────────────────────────────────────────── */
 .scan-overlay::after {

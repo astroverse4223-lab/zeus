@@ -60,9 +60,17 @@ export default function App() {
     const densities = { compact: '8px 12px', comfortable: '12px 16px', spacious: '18px 20px' };
     root.style.setProperty('--c-msg-padding', densities[ui.messageDensity] || '12px 16px');
 
-    // Animation speed
+    // Animation speed — drives both short UI transitions and the
+    // continuous background-pattern drift.
+    const speed = ui.animationSpeed || 'normal';
     const speeds = { fast: '0.1s', normal: '0.25s', slow: '0.5s', off: '0s' };
-    root.style.setProperty('--c-anim-speed', speeds[ui.animationSpeed] || '0.25s');
+    root.style.setProperty('--c-anim-speed', speeds[speed] || '0.25s');
+
+    // Background drift: longer durations so the pattern glides rather than
+    // snaps. "off" parks the animation at frame 0 (static, like before).
+    const bgSpeeds = { fast: '14s', normal: '34s', slow: '70s', off: '34s' };
+    root.style.setProperty('--c-bg-anim-speed', bgSpeeds[speed] || '34s');
+    root.style.setProperty('--c-bg-anim-play', speed === 'off' ? 'paused' : 'running');
 
     // Background pattern
     const pat = ui.backgroundPattern || 'grid';
