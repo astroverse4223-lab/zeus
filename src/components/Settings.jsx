@@ -260,9 +260,6 @@ function AppearanceTab({ local, setLocal, setSettings }) {
         <div style={{ marginTop: 18, borderTop: '1px solid var(--c-border)', paddingTop: 18 }}>
           <KnowledgePanel />
         </div>
-        <div style={{ marginTop: 18, borderTop: '1px solid var(--c-border)', paddingTop: 18 }}>
-          <UpdatePanel />
-        </div>
       </div>
     </div>
   );
@@ -690,6 +687,8 @@ export default function Settings() {
           {/* ═══ SYSTEM / BEHAVIOR ═════════════════════════════════════════════ */}
           {tab === 'behavior' && (
             <div className="flex flex-col gap-4">
+              <UpdatePanel />
+              <div style={{ borderTop: '1px solid var(--c-border)', paddingTop: 4 }} />
               <SectionHeader
                 icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" strokeWidth="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>}
                 label="SHELL & COMMANDS"
