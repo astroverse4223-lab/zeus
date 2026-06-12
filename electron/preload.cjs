@@ -79,4 +79,16 @@ contextBridge.exposeInMainWorld('zeus', {
     ipcRenderer.on('zeus:mini-message', handler);
     return () => ipcRenderer.removeListener('zeus:mini-message', handler);
   },
+
+  // Knowledge base
+  kbAdd:       (paths) => ipcRenderer.invoke('zeus:kb-add', paths),
+  kbPickFiles: ()      => ipcRenderer.invoke('zeus:kb-pick-files'),
+  kbList:      ()      => ipcRenderer.invoke('zeus:kb-list'),
+  kbRemove:    (id)    => ipcRenderer.invoke('zeus:kb-remove', id),
+  kbStats:     ()      => ipcRenderer.invoke('zeus:kb-stats'),
+  onKbProgress: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('zeus:kb-progress', handler);
+    return () => ipcRenderer.removeListener('zeus:kb-progress', handler);
+  },
 });

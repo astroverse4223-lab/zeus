@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useStore from '../store/useStore.js';
 import { THEMES, applyTheme } from '../themes.js';
 import OllamaManager from './OllamaManager.jsx';
+import KnowledgePanel from './KnowledgePanel.jsx';
 
 // ─── Shared style helpers ──────────────────────────────────────────────────────
 const labelStyle = {
@@ -255,6 +256,9 @@ function AppearanceTab({ local, setLocal, setSettings }) {
           </div>
         </div>
         <ToggleRow label="Compact HUD" desc="Reduce top bar height to save screen space" value={!!ui.hudCompact} onChange={v=>saveUi('hudCompact',v)} />
+        <div style={{ marginTop: 18, borderTop: '1px solid var(--c-border)', paddingTop: 18 }}>
+          <KnowledgePanel />
+        </div>
       </div>
     </div>
   );

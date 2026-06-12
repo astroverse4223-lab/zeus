@@ -77,6 +77,22 @@ export default function App() {
     root.setAttribute('data-pattern', pat);
   }, [settings?.ui]);
 
+  // Global drag-drop → add dropped files/folders to the knowledge base
+  useEffect(() => {
+    const onDragOver = (e) => { e.preventDefault(); };
+    const onDrop = (e) => {
+      e.preventDefault();
+      const paths = Array.from(e.dataTransfer?.files || []).map((f) => f.path).filter(Boolean);
+      if (paths.length && window.zeus?.kbAdd) window.zeus.kbAdd(paths);
+    };
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
+
   // Send a message to the AI
   const handleSend = useCallback(async (text, imageBase64 = null, agentMode = false, agentDir = '') => {
     if (!text.trim() || streaming) return;

@@ -87,6 +87,20 @@ Zeus can actually *do things* on your computer — not just talk about them.
 
 ---
 
+### 📚 Knowledge Base (Local RAG)
+
+Drag files or whole folders into Zeus and ask questions over your own documents — fully local and private.
+
+- **Drag-and-drop** files/folders anywhere on the window, or add them from **Settings → Knowledge**
+- Indexes **text, Markdown, code, and PDF** files (folders are scanned recursively, skipping junk like `node_modules`)
+- Embeddings run **locally via Ollama** (`nomic-embed-text`) — your documents never leave your machine
+- Zeus retrieves relevant passages on demand through the **`knowledge_search`** tool
+- Stored in `%APPDATA%\zeus-ai\knowledge\` (chunk metadata in `index.json`, vectors in a `vectors.bin` sidecar)
+
+> Requires Ollama running with the embedding model: `ollama pull nomic-embed-text`
+
+---
+
 ### 🦙 In-App Ollama Model Manager
 
 No need to use the command line to manage local AI models. Zeus has a full model browser built in:

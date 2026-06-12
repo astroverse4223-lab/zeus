@@ -17,6 +17,16 @@ const execAsync = (cmd, opts = {}) => _execBase(cmd, { windowsHide: true, ...opt
 
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'zeus-settings.json');
 
+// ─── Knowledge Base (local RAG) ───────────────────────────────────────────────
+const { createIndex } = require('./knowledge/index.cjs');
+let _knowledge = null;
+function getKnowledge() {
+  if (!_knowledge) {
+    _knowledge = createIndex({ baseDir: path.join(app.getPath('userData'), 'knowledge') });
+  }
+  return _knowledge;
+}
+
 const DEFAULT_SETTINGS = {
   providers: {
     anthropic: { apiKey: '', model: 'claude-opus-4-8',       enabled: true },
@@ -285,6 +295,35 @@ ipcMain.handle('zeus:pick-directory', async () => {
   });
   return result.canceled ? null : result.filePaths[0];
 });
+
+// ─── Knowledge Base IPC ───────────────────────────────────────────────────────
+
+ipcMain.handle('zeus:kb-pick-files', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    title: 'ZEUS — Add files to Knowledge Base',
+  });
+  return r.canceled ? [] : r.filePaths;
+});
+
+ipcMain.handle('zeus:kb-add', async (e, paths) => {
+  if (!Array.isArray(paths) || !paths.length) return { added: [], skipped: [] };
+  const wc = e.sender;
+  try {
+    return await getKnowledge().ingest(paths, (p) => {
+      if (!wc.isDestroyed()) wc.send('zeus:kb-progress', p);
+    });
+  } catch (err) {
+    return { error: err.code || err.message, added: [], skipped: [] };
+  }
+});
+
+ipcMain.handle('zeus:kb-list', () => getKnowledge().listSources());
+ipcMain.handle('zeus:kb-remove', (_, id) => {
+  getKnowledge().removeSource(id);
+  return getKnowledge().listSources();
+});
+ipcMain.handle('zeus:kb-stats', () => getKnowledge().stats());
 
 // ─── Memory IPC ───────────────────────────────────────────────────────────────
 
@@ -775,6 +814,19 @@ const TOOLS = [
     },
     dangerous: false,
   },
+  {
+    name: 'knowledge_search',
+    description: "Search the user's indexed personal documents / knowledge base for relevant passages. Use whenever the user asks about their own files, notes, manuals, PDFs, or documents they have added to Zeus.",
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: "What to look for in the user's documents" },
+        k: { type: 'number', description: 'How many passages to return (default 5)' },
+      },
+      required: ['query'],
+    },
+    dangerous: false,
+  },
   // ── Integration / Web Tools ───────────────────────────────────────────────────
   {
     name: 'web_search',
@@ -895,6 +947,7 @@ function buildToolSummary(name, input, result) {
     case 'memory_store':      return `[mem+]  [${input.category || 'note'}] ${String(input.value || '').slice(0, 60)}`;
     case 'memory_recall':     return `[mem?]  "${input.query}" (${result.count ?? '?'} results)`;
     case 'memory_list':       return `[mem]   listing memory`;
+    case 'knowledge_search':  return `[kb?]   "${input.query}" (${result.count ?? 0} hits)`;
     case 'memory_delete':     return `[mem-]  id:${input.id}`;
     case 'send_notification': return `[notify] ${input.title}: ${input.body}`;
     case 'set_reminder':      return `[remind] ${input.message} in ${input.minutes}m`;
@@ -1416,6 +1469,23 @@ async function executeTool(name, input, requireConfirm) {
         }
         if (found) saveMemoryFile(memory);
         return found ? { success: true } : { error: 'Memory entry not found' };
+      }
+
+      case 'knowledge_search': {
+        try {
+          const hits = await getKnowledge().search(input.query, input.k || 5);
+          if (!hits.length) {
+            return { results: [], message: 'Knowledge base is empty or no relevant passages found. Ask the user to add documents in the Knowledge panel.' };
+          }
+          return {
+            count: hits.length,
+            results: hits.map((h) => ({ source: h.sourceName, score: Number(h.score.toFixed(3)), text: h.text })),
+          };
+        } catch (err) {
+          if (err.code === 'OLLAMA_DOWN') return { error: 'Ollama is not running. Start Ollama to search the knowledge base.' };
+          if (err.code === 'MODEL_MISSING') return { error: 'Embedding model missing. Run: ollama pull nomic-embed-text' };
+          return { error: err.message };
+        }
       }
 
       // ── Web / Integration Tools ──────────────────────────────────────────────
