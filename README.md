@@ -130,6 +130,18 @@ Zeus remembers things about you **between conversations and app restarts**:
 
 ---
 
+### ⬆️ Auto-Update
+
+Zeus checks GitHub for new releases on startup and from **Settings → Updates**.
+When a newer version is published, it can download the build straight to your
+Downloads folder and reveal it for you to unzip and replace — no installer needed.
+
+- 🔔 Non-intrusive startup check → desktop notification if an update exists
+- 🔍 Manual **Check for updates** button shows the current and latest version
+- 📥 In-app download with a progress bar, then **Reveal in folder**
+
+---
+
 ### 🎨 Themes & Customization
 
 Zeus ships with multiple carefully crafted themes:
