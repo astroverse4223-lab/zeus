@@ -10,7 +10,8 @@
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,blue \"vite\" \"npx wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "dist": "vite build && node scripts/package-app.cjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node electron/update/test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
