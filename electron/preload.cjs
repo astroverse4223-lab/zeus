@@ -91,4 +91,15 @@ contextBridge.exposeInMainWorld('zeus', {
     ipcRenderer.on('zeus:kb-progress', handler);
     return () => ipcRenderer.removeListener('zeus:kb-progress', handler);
   },
+
+  // Auto-update
+  appVersion:     ()    => ipcRenderer.invoke('zeus:app-version'),
+  updateCheck:    ()    => ipcRenderer.invoke('zeus:update-check'),
+  updateDownload: (url) => ipcRenderer.invoke('zeus:update-download', url),
+  revealFile:     (p)   => ipcRenderer.invoke('zeus:reveal-file', p),
+  onUpdateProgress: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('zeus:update-progress', handler);
+    return () => ipcRenderer.removeListener('zeus:update-progress', handler);
+  },
 });

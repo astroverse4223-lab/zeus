@@ -6,6 +6,7 @@
 const { packager } = require('@electron/packager');
 const path     = require('path');
 const fs       = require('fs');
+const pkg      = require('../package.json');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -21,7 +22,7 @@ async function main() {
     overwrite:    true,
     asar:         false,
     icon:         path.join(ROOT, 'build', 'icon.ico'),   // packager auto-converts PNG→ICO if needed
-    appVersion:   '1.0.0',
+    appVersion:   pkg.version,
     appCopyright: 'Copyright © 2025 Zeus AI',
     win32metadata: {
       CompanyName:      'Zeus AI',
