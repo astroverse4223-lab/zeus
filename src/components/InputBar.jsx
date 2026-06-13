@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import useStore from '../store/useStore.js';
 import { FAST_MODELS, FAST_MODEL_LABELS } from './HUD.jsx';
+import KnowledgePanel from './KnowledgePanel.jsx';
 
 const MODELS = {
   anthropic: [
@@ -50,6 +51,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
     draft: text, setDraft: setText, pendingImage, setPendingImage,
   } = useStore();
   const [listening, setListening] = useState(false);
+  const [kbOpen, setKbOpen] = useState(false);
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -159,9 +161,34 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
 
   return (
     <div
-      className="flex-shrink-0 px-4 pb-4 pt-2"
+      className="flex-shrink-0 px-4 pb-4 pt-2 relative"
       style={{ background: 'linear-gradient(0deg, var(--c-bg) 80%, transparent)' }}
     >
+      {/* Knowledge base popover */}
+      {kbOpen && (
+        <>
+          <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setKbOpen(false)} />
+          <div
+            className="absolute"
+            style={{
+              bottom: '100%', right: 16, marginBottom: 8, width: 380, maxHeight: 440,
+              overflowY: 'auto', zIndex: 50,
+              background: 'var(--c-card)', border: '1px solid var(--c-border)',
+              borderRadius: 12, padding: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+          >
+            <div className="flex items-center justify-end" style={{ marginBottom: 4 }}>
+              <button
+                onClick={() => setKbOpen(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--c-muted)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}
+                title="Close"
+              >✕</button>
+            </div>
+            <KnowledgePanel />
+          </div>
+        </>
+      )}
+
       {/* Model selector row */}
       <div className="flex items-center gap-2 mb-2 px-1">
         {/* Sticky Chat / Agent toggle — stays where you put it, like VSCode */}
@@ -333,6 +360,24 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
             >✕</button>
           </div>
         )}
+
+        {/* Knowledge base button */}
+        <button
+          className="btn-icon w-9 h-9 rounded-lg flex-shrink-0"
+          style={{
+            background: kbOpen ? 'rgba(0,212,255,0.12)' : 'transparent',
+            border: kbOpen ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
+            color: kbOpen ? 'var(--c-accent)' : 'var(--c-muted)',
+            transition: 'all 0.15s',
+          }}
+          onClick={() => setKbOpen(o => !o)}
+          title="Knowledge base — add files/folders for Zeus to reference"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+        </button>
 
         {/* Screen capture button */}
         <button
