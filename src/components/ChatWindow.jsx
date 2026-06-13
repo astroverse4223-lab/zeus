@@ -123,12 +123,9 @@ export default function ChatWindow({ onSend, onStop, onOpenAgent }) {
     }
   }, []);
 
-  // Auto-open terminal when Zeus uses a tool
-  useEffect(() => {
-    if (!window.zeus?.onTerminalLog) return;
-    const unsub = window.zeus.onTerminalLog(() => setTerminalOpen(true));
-    return unsub;
-  }, []);
+  // The terminal panel no longer auto-opens when Zeus runs a command — open it
+  // manually via the input bar's "+" → Terminal. The Terminal component captures
+  // command output on its own while it's open; results also appear in the chat.
 
   const scrollToBottom = useCallback((behavior = 'smooth') => {
     bottomRef.current?.scrollIntoView({ behavior });
