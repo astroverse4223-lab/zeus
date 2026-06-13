@@ -52,6 +52,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   } = useStore();
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -361,59 +362,62 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
           </div>
         )}
 
-        {/* Knowledge base button */}
-        <button
-          className="btn-icon w-9 h-9 rounded-lg flex-shrink-0"
-          style={{
-            background: kbOpen ? 'rgba(0,212,255,0.12)' : 'transparent',
-            border: kbOpen ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
-            color: kbOpen ? 'var(--c-accent)' : 'var(--c-muted)',
-            transition: 'all 0.15s',
-          }}
-          onClick={() => setKbOpen(o => !o)}
-          title="Knowledge base — add files/folders for Zeus to reference"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-          </svg>
-        </button>
-
-        {/* Screen capture button */}
-        <button
-          className="btn-icon w-9 h-9 rounded-lg flex-shrink-0"
-          style={{
-            background: pendingImage ? 'rgba(0,212,255,0.12)' : 'transparent',
-            border: pendingImage ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
-            color: pendingImage ? 'var(--c-accent)' : 'var(--c-muted)',
-            transition: 'all 0.15s',
-          }}
-          onClick={captureScreen}
-          title="Attach screenshot — let Zeus see your screen"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
-          </svg>
-        </button>
-
-        {/* Terminal toggle button */}
-        {onToggleTerminal && (
+        {/* Tools menu ("+") — collapses Knowledge, Screenshot & Terminal */}
+        <div className="relative flex-shrink-0">
+          {toolsOpen && (
+            <>
+              <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setToolsOpen(false)} />
+              <div
+                className="absolute anim-fade-up"
+                style={{
+                  bottom: '100%', right: 0, marginBottom: 10, width: 190, zIndex: 50,
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  borderRadius: 12, padding: 6, boxShadow: '0 10px 34px rgba(0,0,0,0.55)',
+                }}
+              >
+                {[
+                  { label: 'Add files', stroke: 'var(--c-accent)', onClick: () => setKbOpen(true),
+                    icon: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></> },
+                  { label: 'Screenshot', stroke: 'var(--c-accent)', onClick: captureScreen,
+                    icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
+                  ...(onToggleTerminal ? [{
+                    label: terminalOpen ? 'Hide terminal' : 'Terminal',
+                    stroke: terminalOpen ? 'var(--c-green)' : 'var(--c-accent)', onClick: onToggleTerminal,
+                    icon: <><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></>,
+                  }] : []),
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    className="w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2"
+                    style={{ background: 'transparent', border: 'none', color: 'var(--c-text)', cursor: 'pointer', fontSize: 12, fontWeight: 500, transition: 'background 0.12s' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-glow)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    onClick={() => { setToolsOpen(false); item.onClick(); }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={item.stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{item.icon}</svg>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <button
             className="btn-icon w-9 h-9 rounded-lg flex-shrink-0"
             style={{
-              background: terminalOpen ? 'rgba(0,255,128,0.12)' : 'transparent',
-              border: terminalOpen ? '1px solid var(--c-green)' : '1px solid var(--c-border)',
-              color: terminalOpen ? 'var(--c-green)' : 'var(--c-muted)',
+              background: (toolsOpen || kbOpen || pendingImage || terminalOpen) ? 'rgba(0,212,255,0.12)' : 'transparent',
+              border: (toolsOpen || kbOpen || pendingImage || terminalOpen) ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
+              color: (toolsOpen || kbOpen || pendingImage || terminalOpen) ? 'var(--c-accent)' : 'var(--c-muted)',
               transition: 'all 0.15s',
             }}
-            onClick={onToggleTerminal}
-            title={terminalOpen ? 'Hide terminal' : 'Open terminal'}
+            onClick={() => setToolsOpen((o) => !o)}
+            title="Tools — add files, screenshot, terminal"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+              style={{ transform: toolsOpen ? 'rotate(45deg)' : 'none', transition: 'transform 0.2s ease' }}>
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
           </button>
-        )}
+        </div>
 
         {/* Voice button */}
         <div className="relative flex-shrink-0">
@@ -441,7 +445,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
         {/* Send / Stop button */}
         {streaming ? (
           <button
-            className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center"
+            className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center"
             style={{
               background: 'rgba(255,51,102,0.15)',
               border: '1px solid var(--c-red)',
@@ -457,22 +461,23 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
           </button>
         ) : (
           <button
-            className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center"
+            className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center"
             onClick={handleSend}
             disabled={!text.trim()}
             title={agentMode ? 'Send to agent (Enter)' : 'Send (Enter)'}
             style={{
-              opacity: text.trim() ? 1 : 0.4,
+              opacity: text.trim() ? 1 : 0.45,
               cursor: text.trim() ? 'pointer' : 'default',
               border: 'none',
               background: agentMode
                 ? 'linear-gradient(135deg, #7c3aed, #a855f7)'
                 : 'linear-gradient(135deg, var(--c-accent2), var(--c-accent))',
               boxShadow: text.trim()
-                ? agentMode ? '0 0 14px rgba(168,85,247,0.45)' : '0 0 14px rgba(0,212,255,0.35)'
+                ? agentMode ? '0 0 20px rgba(168,85,247,0.6)' : '0 0 20px rgba(0,212,255,0.55)'
                 : 'none',
               color: '#fff',
-              transition: 'background 0.2s, box-shadow 0.2s',
+              transform: text.trim() ? 'scale(1)' : 'scale(0.94)',
+              transition: 'background 0.2s, box-shadow 0.2s, transform 0.2s',
             }}
           >
             {agentMode ? (
