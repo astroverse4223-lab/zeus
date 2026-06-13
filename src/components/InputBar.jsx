@@ -321,10 +321,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
       </div>
 
       {/* Input row */}
-      <div
-        className="flex items-end gap-2 rounded-xl p-2 glow-border"
-        style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)' }}
-      >
+      <div className="flex items-end gap-2 p-2 zeus-inputbar">
         {/* Textarea */}
         <textarea
           ref={textareaRef}

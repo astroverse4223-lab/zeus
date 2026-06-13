@@ -167,6 +167,52 @@ html, body, #root {
   animation-name: bgStarfield;
 }
 
+/* ── Chat input bar: animated gradient border + breathing focus glow ─────────── */
+.zeus-inputbar {
+  position: relative;
+  border-radius: 14px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.zeus-inputbar::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(120deg,
+    var(--c-accent2), var(--c-accent), var(--c-purple, #a855f7), var(--c-accent), var(--c-accent2));
+  background-size: 300% 100%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.zeus-inputbar:focus-within {
+  border-color: transparent;
+  animation: inputGlow 2.8s ease-in-out infinite;
+}
+.zeus-inputbar:focus-within::before {
+  opacity: 1;
+  animation: borderFlow 4s linear infinite;
+}
+@keyframes borderFlow {
+  0%   { background-position:   0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+@keyframes inputGlow {
+  0%, 100% { box-shadow: 0 0 16px rgba(0, 212, 255, 0.20); }
+  50%      { box-shadow: 0 0 30px rgba(0, 212, 255, 0.42); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zeus-inputbar:focus-within,
+  .zeus-inputbar:focus-within::before { animation: none; }
+  .zeus-inputbar:focus-within { box-shadow: 0 0 18px rgba(0,212,255,0.3); }
+}
+
 /* ── Glassmorphism ──────────────────────────────────────────────────────────── */
 .glass {
   background: rgba(10, 15, 30, 0.75);
