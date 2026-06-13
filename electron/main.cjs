@@ -600,6 +600,82 @@ ipcMain.handle('zeus:terminal-exec', async (_, { command }) => {
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
+// ─── Helpers for web-reader / download tools ──────────────────────────────────
+function fetchPageHtml(url) {
+  return new Promise((resolve, reject) => {
+    const go = (u, redirects) => {
+      let parsed;
+      try { parsed = new URL(u); } catch { return reject(new Error('Invalid URL')); }
+      const lib = parsed.protocol === 'http:' ? require('http') : require('https');
+      const req = lib.get({
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+        path: parsed.pathname + parsed.search,
+        headers: { 'User-Agent': 'Mozilla/5.0 (ZeusAI)', Accept: 'text/html,*/*' },
+      }, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 5) {
+          res.resume();
+          return go(new URL(res.headers.location, u).href, redirects + 1);
+        }
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { data += c; if (data.length > 3000000) req.destroy(); });
+        res.on('end', () => resolve(data));
+      });
+      req.on('error', reject);
+      req.setTimeout(15000, () => req.destroy(new Error('Request timed out')));
+    };
+    go(url, 0);
+  });
+}
+
+function htmlToText(html) {
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<\/(p|div|h[1-6]|li|br|tr)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function downloadToFolder(url, dir, filename) {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(dir, { recursive: true });
+    const go = (u, redirects) => {
+      const parsed = new URL(u);
+      const lib = parsed.protocol === 'http:' ? require('http') : require('https');
+      const req = lib.get({
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+        path: parsed.pathname + parsed.search,
+        headers: { 'User-Agent': 'ZeusAI' },
+      }, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 5) {
+          res.resume();
+          return go(new URL(res.headers.location, u).href, redirects + 1);
+        }
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+        const raw = filename || decodeURIComponent(parsed.pathname.split('/').pop() || '') || 'download';
+        const name = raw.replace(/[<>:"/\\|?*]/g, '_');
+        const dest = path.join(dir, name);
+        const out = fs.createWriteStream(dest);
+        res.pipe(out);
+        out.on('finish', () => out.close(() => resolve(dest)));
+        out.on('error', (e) => { fs.unlink(dest, () => {}); reject(e); });
+      });
+      req.on('error', reject);
+    };
+    go(url, 0);
+  });
+}
+
 const TOOLS = [
   {
     name: 'get_system_info',
@@ -865,6 +941,49 @@ const TOOLS = [
       },
       required: ['query'],
     },
+    dangerous: false,
+  },
+  // ── Power Tools: web reader, PC power, media, process ─────────────────────────
+  {
+    name: 'read_webpage',
+    description: 'Fetch a web page and return its readable text content (article body, stripped of HTML/scripts/navigation). Use to actually read an article, doc, or any URL — not just search for it.',
+    schema: { type: 'object', properties: { url: { type: 'string', description: 'Full URL to read, e.g. https://example.com/article' } }, required: ['url'] },
+    dangerous: false,
+  },
+  {
+    name: 'download_file',
+    description: "Download a file from a URL and save it to the user's Downloads folder. Returns the saved path.",
+    schema: { type: 'object', properties: { url: { type: 'string', description: 'Direct file URL' }, filename: { type: 'string', description: 'Optional filename; defaults to the name in the URL' } }, required: ['url'] },
+    dangerous: false,
+  },
+  {
+    name: 'system_power',
+    description: 'Control the PC power state. Destructive actions (restart, shutdown, signout) prompt the user to confirm first.',
+    schema: { type: 'object', properties: { action: { type: 'string', enum: ['lock', 'sleep', 'restart', 'shutdown', 'signout'], description: 'lock the screen, sleep, restart, shutdown, or sign out' } }, required: ['action'] },
+    dangerous: false,
+  },
+  {
+    name: 'set_volume',
+    description: 'Set the system master volume to a level (0-100), or toggle mute.',
+    schema: { type: 'object', properties: { level: { type: 'number', description: 'Target volume 0-100' }, mute: { type: 'boolean', description: 'Pass true or false to toggle mute on/off' } } },
+    dangerous: false,
+  },
+  {
+    name: 'media_control',
+    description: 'Control media playback in any player (Spotify, YouTube, etc.): play/pause, next track, previous track, or stop.',
+    schema: { type: 'object', properties: { action: { type: 'string', enum: ['playpause', 'next', 'previous', 'stop'] } }, required: ['action'] },
+    dangerous: false,
+  },
+  {
+    name: 'kill_process',
+    description: 'Forcefully terminate a running process by name or PID.',
+    schema: { type: 'object', properties: { name: { type: 'string', description: 'Process/executable name, e.g. notepad.exe' }, pid: { type: 'number', description: 'Process ID (use instead of name)' } } },
+    dangerous: true,
+  },
+  {
+    name: 'open_path',
+    description: 'Open a file, folder, or application in its default handler — like double-clicking it. Folders open in Explorer.',
+    schema: { type: 'object', properties: { path: { type: 'string', description: 'Absolute path to a file or folder' } }, required: ['path'] },
     dangerous: false,
   },
   // ── Integration / Web Tools ───────────────────────────────────────────────────
@@ -1526,6 +1645,90 @@ async function executeTool(name, input, requireConfirm) {
           if (err.code === 'MODEL_MISSING') return { error: 'Embedding model missing. Run: ollama pull nomic-embed-text' };
           return { error: err.message };
         }
+      }
+
+      // ── Power Tools ──────────────────────────────────────────────────────────
+
+      case 'read_webpage': {
+        try {
+          const html = await fetchPageHtml(input.url);
+          const text = htmlToText(html);
+          const max = 8000;
+          return { url: input.url, chars: text.length, text: text.length > max ? text.slice(0, max) + '\n…[truncated]' : text };
+        } catch (e) { return { error: e.message }; }
+      }
+
+      case 'download_file': {
+        try {
+          const dest = await downloadToFolder(input.url, app.getPath('downloads'), input.filename);
+          return { success: true, saved: dest };
+        } catch (e) { return { error: e.message }; }
+      }
+
+      case 'system_power': {
+        const cmds = {
+          lock:     'rundll32.exe user32.dll,LockWorkStation',
+          sleep:    'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+          restart:  'shutdown /r /t 0',
+          shutdown: 'shutdown /s /t 0',
+          signout:  'shutdown /l',
+        };
+        const cmd = cmds[input.action];
+        if (!cmd) return { error: 'Unknown action. Use lock, sleep, restart, shutdown, or signout.' };
+        if (['restart', 'shutdown', 'signout'].includes(input.action)) {
+          const choice = dialog.showMessageBoxSync(mainWindow, {
+            type: 'warning', buttons: ['Cancel', `Yes, ${input.action}`], defaultId: 0, cancelId: 0,
+            title: '⚡ ZEUS — Confirm', message: `Zeus wants to ${input.action} your PC. Continue?`,
+          });
+          if (choice !== 1) return { denied: true, message: 'User cancelled.' };
+        }
+        execAsync(cmd).catch(() => {});
+        return { success: true, action: input.action };
+      }
+
+      case 'set_volume': {
+        const sk = (keys) => execAsync(`powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; ${keys}"`);
+        try {
+          if (typeof input.mute === 'boolean') {
+            await sk('$w.SendKeys([char]173)'); // toggle mute
+            return { success: true, mute: 'toggled' };
+          }
+          if (typeof input.level === 'number') {
+            const lvl = Math.max(0, Math.min(100, Math.round(input.level)));
+            await sk('1..50 | ForEach-Object { $w.SendKeys([char]174) }'); // floor to 0
+            const ups = Math.round(lvl / 2);
+            if (ups > 0) await sk(`1..${ups} | ForEach-Object { $w.SendKeys([char]175) }`);
+            return { success: true, level: lvl };
+          }
+          return { error: 'Specify level (0-100) or mute (true/false).' };
+        } catch (e) { return { error: e.message }; }
+      }
+
+      case 'media_control': {
+        const keys = { playpause: 179, next: 176, previous: 177, stop: 178 };
+        const code = keys[input.action];
+        if (!code) return { error: 'Unknown action. Use playpause, next, previous, or stop.' };
+        try {
+          await execAsync(`powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]${code})"`);
+          return { success: true, action: input.action };
+        } catch (e) { return { error: e.message }; }
+      }
+
+      case 'kill_process': {
+        let cmd;
+        if (input.pid) cmd = `taskkill /F /PID ${parseInt(input.pid, 10)}`;
+        else if (input.name) { const n = /\.exe$/i.test(input.name) ? input.name : input.name + '.exe'; cmd = `taskkill /F /IM "${n}"`; }
+        else return { error: 'Provide a process name or pid.' };
+        try { const { stdout } = await execAsync(cmd); return { success: true, output: stdout.trim() }; }
+        catch (e) { return { error: (e.stderr || e.message || '').trim() }; }
+      }
+
+      case 'open_path': {
+        try {
+          const err = await shell.openPath(input.path);
+          if (err) return { error: err };
+          return { success: true, opened: input.path };
+        } catch (e) { return { error: e.message }; }
       }
 
       // ── Web / Integration Tools ──────────────────────────────────────────────
