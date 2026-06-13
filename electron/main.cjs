@@ -2128,11 +2128,41 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
 
 const AGENT_CONTINUE_MSG = '[AGENT CONTINUE] The task is not finished. Call get_directory_tree on the working directory to see what exists, then call write_file for each remaining file with its COMPLETE content. Do not output code as text. Do not ask questions. Keep building.';
 
+// Rebuild prior tool calls (carried on assistant messages as `toolActivities`)
+// into real Anthropic tool_use/tool_result turns, so the model can see that a
+// tool already ran and succeeded — and won't repeat it when the user just says
+// "thanks". Each assistant-with-tools message becomes three turns:
+//   assistant[tool_use…] → user[tool_result…] → assistant[summary text].
+function expandHistoryForAnthropic(messages) {
+  const out = [];
+  for (const m of messages) {
+    const acts = (m.role === 'assistant' && Array.isArray(m.toolActivities))
+      ? m.toolActivities.filter(a => a && a.tool && a.tool !== 'task_complete')
+      : [];
+    if (acts.length) {
+      const toolUse = [];
+      const toolResults = [];
+      acts.forEach((a, i) => {
+        const id = `hist-${out.length}-${i}`;
+        toolUse.push({ type: 'tool_use', id, name: a.tool, input: a.input || {} });
+        toolResults.push({ type: 'tool_result', tool_use_id: id, content: safeToolResult(a.result ?? {}) });
+      });
+      out.push({ role: 'assistant', content: toolUse });
+      out.push({ role: 'user', content: toolResults });
+      const text = typeof m.content === 'string' ? m.content.trim() : '';
+      out.push({ role: 'assistant', content: text || '(done)' });
+    } else {
+      out.push({ role: m.role, content: m.content });
+    }
+  }
+  return out;
+}
+
 async function runAnthropic(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { Anthropic } = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
 
-  let msgs = messages.map(m => ({ role: m.role, content: m.content }));
+  let msgs = expandHistoryForAnthropic(messages);
   let toolCallCount = 0;
   let agentContinues = 0;
   const AGENT_MAX_ITERS = 300; // large React/full-stack projects need 100+ tool calls

@@ -160,14 +160,20 @@ export default function App() {
       m.role === 'user' && typeof m.content === 'string' &&
       m.content.includes('[ZEUS CODING AGENT — ACTIVATED]')
     );
+    // Carry tool calls/results so the backend can replay them as real tool turns —
+    // otherwise the model loses track that a tool already ran and may repeat it
+    // on the next message (e.g. when you just say "thanks").
+    const toHist = (m) => (
+      m.role === 'assistant' && m.toolActivities?.length
+        ? { role: m.role, content: m.content || '', toolActivities: m.toolActivities }
+        : { role: m.role, content: m.content || '' }
+    );
     let history;
     if (agentMsgIdx >= 0 && allFiltered.length - agentMsgIdx > maxCtx) {
       const recent = allFiltered.slice(-(maxCtx - 1));
-      history = [allFiltered[agentMsgIdx], ...recent]
-        .map(m => ({ role: m.role, content: m.content || '' }));
+      history = [allFiltered[agentMsgIdx], ...recent].map(toHist);
     } else {
-      history = allFiltered.slice(-maxCtx)
-        .map(m => ({ role: m.role, content: m.content || '' }));
+      history = allFiltered.slice(-maxCtx).map(toHist);
     }
 
     const streamId = uuid();
