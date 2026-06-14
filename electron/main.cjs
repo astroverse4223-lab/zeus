@@ -2318,13 +2318,38 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey, im
 
 // ─── OpenAI ───────────────────────────────────────────────────────────────────
 
+// Replay prior tool calls as OpenAI tool_calls / tool messages (shared by OpenAI
+// and Ollama) so the model sees completed work and won't repeat it next turn.
+function expandHistoryForOpenAI(messages) {
+  const out = [];
+  for (const m of messages) {
+    const acts = (m.role === 'assistant' && Array.isArray(m.toolActivities))
+      ? m.toolActivities.filter(a => a && a.tool && a.tool !== 'task_complete')
+      : [];
+    if (acts.length) {
+      const tool_calls = acts.map((a, i) => ({
+        id: `hist-${out.length}-${i}`,
+        type: 'function',
+        function: { name: a.tool, arguments: JSON.stringify(a.input || {}) },
+      }));
+      out.push({ role: 'assistant', content: null, tool_calls });
+      acts.forEach((a, i) => out.push({ role: 'tool', tool_call_id: tool_calls[i].id, content: safeToolResult(a.result ?? {}) }));
+      const text = typeof m.content === 'string' ? m.content.trim() : '';
+      if (text) out.push({ role: 'assistant', content: text });
+    } else {
+      out.push({ role: m.role, content: m.content });
+    }
+  }
+  return out;
+}
+
 async function runOpenAI(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { OpenAI } = require('openai');
   const client = new OpenAI({ apiKey });
 
   let msgs = [
     { role: 'system', content: getZeusSystem() },
-    ...messages.map(m => ({ role: m.role, content: m.content })),
+    ...expandHistoryForOpenAI(messages),
   ];
   let toolCallCount = 0;
   let agentContinues = 0;
@@ -2457,6 +2482,30 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 
+// Replay prior tool calls as Gemini functionCall/functionResponse turns so the
+// model sees completed work and won't repeat it next turn.
+function expandHistoryForGemini(history) {
+  const out = [];
+  for (const m of history) {
+    const acts = (m.role === 'assistant' && Array.isArray(m.toolActivities))
+      ? m.toolActivities.filter(a => a && a.tool && a.tool !== 'task_complete')
+      : [];
+    if (acts.length) {
+      out.push({ role: 'model', parts: acts.map(a => ({ functionCall: { name: a.tool, args: a.input || {} } })) });
+      out.push({ role: 'user', parts: acts.map(a => {
+        let safeRes;
+        try { safeRes = JSON.parse(safeToolResult(a.result ?? {})); } catch { safeRes = { result: safeToolResult(a.result ?? {}) }; }
+        return { functionResponse: { name: a.tool, response: { result: safeRes } } };
+      }) });
+      const text = typeof m.content === 'string' ? m.content.trim() : '';
+      out.push({ role: 'model', parts: [{ text: text || '(done)' }] });
+    } else {
+      out.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || '' }] });
+    }
+  }
+  return out;
+}
+
 async function runGemini(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -2476,10 +2525,7 @@ async function runGemini(sender, streamId, state, messages, model, apiKey, image
   let toolCallCount = 0;
   let agentContinues = 0;
 
-  const history = messages.slice(0, -1).map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+  const history = expandHistoryForGemini(messages.slice(0, -1));
 
   const chat = gemModel.startChat({ history });
   const lastText = messages[messages.length - 1].content;
@@ -2599,7 +2645,7 @@ async function runOllama(sender, streamId, state, messages, model, baseURL, imag
 
   let msgs = [
     { role: 'system', content: getZeusSystem() },
-    ...messages.map(m => ({ role: m.role, content: m.content })),
+    ...expandHistoryForOpenAI(messages),
   ];
   let toolCallCount = 0;
   let agentContinues = 0;
