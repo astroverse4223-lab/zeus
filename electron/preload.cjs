@@ -49,6 +49,12 @@ contextBridge.exposeInMainWorld('zeus', {
     return () => ipcRenderer.removeListener('zeus:ollama-progress', handler);
   },
 
+  // Plugins (skill packs)
+  pluginList:    ()        => ipcRenderer.invoke('zeus:plugin-list'),
+  pluginInstall: (url)     => ipcRenderer.invoke('zeus:plugin-install', url),
+  pluginRemove:  (slug)    => ipcRenderer.invoke('zeus:plugin-remove', slug),
+  pluginToggle:  (slug, on) => ipcRenderer.invoke('zeus:plugin-toggle', { slug, on }),
+
   // Embedded terminal
   terminalExec: (cmd) => ipcRenderer.invoke('zeus:terminal-exec', { command: cmd }),
   terminalCwd:  ()    => ipcRenderer.invoke('zeus:terminal-cwd'),

@@ -40,6 +40,20 @@ function getKnowledge() {
 // ─── Auto-update ──────────────────────────────────────────────────────────────
 const updater = require('./update/index.cjs');
 
+// ─── Plugins (skill packs) ──────────────────────────────────────────────────────
+const plugins = require('./plugins/index.cjs');
+function getPluginsDir() { return path.join(app.getPath('userData'), 'plugins'); }
+// Concatenated skill text for the plugins enabled for a given mode ('agent'|'chat').
+function pluginSkillsFor(mode) {
+  try { return plugins.loadEnabledSkills(getPluginsDir(), settings?.plugins?.enabled || [], mode); }
+  catch { return ''; }
+}
+// Block appended to a system prompt with the enabled plugins' skill text (or '').
+function pluginSection(mode) {
+  const s = pluginSkillsFor(mode);
+  return s ? `\n\n──────── ACTIVE PLUGINS (user-installed skill packs) ────────${s}` : '';
+}
+
 const DEFAULT_SETTINGS = {
   providers: {
     anthropic: { apiKey: '', model: 'claude-opus-4-8',       enabled: true },
@@ -53,6 +67,7 @@ const DEFAULT_SETTINGS = {
   userName: 'Sir',
   theme: 'zeus',
   memory: { enabled: true },
+  plugins: { enabled: [] }, // slugs of installed skill-pack plugins that are turned on
   integrations: {
     telegram: { enabled: false, botToken: '' },
     github:   { token: '' },
@@ -368,6 +383,47 @@ ipcMain.handle('zeus:update-download', async (e, url) => {
   } catch (err) {
     return { error: 'Download failed — try again.' };
   }
+});
+
+// ─── Plugins IPC ──────────────────────────────────────────────────────────────
+ipcMain.handle('zeus:plugin-list', () => {
+  const enabled = new Set(settings?.plugins?.enabled || []);
+  return plugins.listPlugins(getPluginsDir()).map(p => ({ ...p, enabled: enabled.has(p.slug) }));
+});
+
+ipcMain.handle('zeus:plugin-install', async (_, url) => {
+  try {
+    const meta = await plugins.installPlugin({ baseDir: getPluginsDir(), url });
+    // Auto-enable freshly installed plugins.
+    const enabled = new Set(settings?.plugins?.enabled || []);
+    enabled.add(meta.slug);
+    settings.plugins = { ...(settings.plugins || {}), enabled: [...enabled] };
+    saveSettings(settings);
+    return { ok: true, plugin: meta };
+  } catch (err) {
+    return { error: err.message || 'Install failed.' };
+  }
+});
+
+ipcMain.handle('zeus:plugin-remove', (_, slug) => {
+  try {
+    plugins.removePlugin(getPluginsDir(), slug);
+    const enabled = (settings?.plugins?.enabled || []).filter(s => s !== plugins.slugify(slug));
+    settings.plugins = { ...(settings.plugins || {}), enabled };
+    saveSettings(settings);
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message || 'Remove failed.' };
+  }
+});
+
+ipcMain.handle('zeus:plugin-toggle', (_, { slug, on }) => {
+  const s = plugins.slugify(slug);
+  const enabled = new Set(settings?.plugins?.enabled || []);
+  if (on) enabled.add(s); else enabled.delete(s);
+  settings.plugins = { ...(settings.plugins || {}), enabled: [...enabled] };
+  saveSettings(settings);
+  return { ok: true, enabled: [...enabled] };
 });
 
 ipcMain.handle('zeus:reveal-file', (_, filePath) => {
@@ -1942,7 +1998,7 @@ Current date/time available via get_datetime. Use web_search for any current inf
 
 For long coding tasks: work methodically, write complete files, confirm each major step. Never stop mid-task — if you hit a problem, debug and keep going.
 
-Important: Always explain what you're about to do. For destructive actions, confirm intent first.${formatMemoryForPrompt()}${extra}${langLine}`;
+Important: Always explain what you're about to do. For destructive actions, confirm intent first.${formatMemoryForPrompt()}${extra}${langLine}${pluginSection('chat')}`;
 }
 
 function getAgentSystem(workingDir) {
@@ -1964,7 +2020,7 @@ ABSOLUTE RULES:
 
 Valid patterns:
   New project:     write_file → write_file → run_command → task_complete
-  Existing/fix:    get_directory_tree → read_file → patch_file/write_file → run_command → task_complete`;
+  Existing/fix:    get_directory_tree → read_file → patch_file/write_file → run_command → task_complete${pluginSection('agent')}`;
 }
 
 function toAnthropicTools(tools) {

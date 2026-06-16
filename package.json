@@ -11,7 +11,7 @@
     "build": "vite build",
     "dist": "vite build && node scripts/package-app.cjs",
     "preview": "vite preview",
-    "test": "node electron/knowledge/test.cjs && node electron/update/test.cjs"
+    "test": "node electron/knowledge/test.cjs && node electron/update/test.cjs && node electron/plugins/test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

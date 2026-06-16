@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import useStore from '../store/useStore.js';
 import { FAST_MODELS, FAST_MODEL_LABELS } from './HUD.jsx';
 import KnowledgePanel from './KnowledgePanel.jsx';
+import PluginsPanel from './PluginsPanel.jsx';
 
 const MODELS = {
   anthropic: [
@@ -52,6 +53,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   } = useStore();
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [ollamaInstalled, setOllamaInstalled] = useState([]); // real installed models from `ollama list`
   const textareaRef = useRef(null);
@@ -198,6 +200,31 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
               >✕</button>
             </div>
             <KnowledgePanel />
+          </div>
+        </>
+      )}
+
+      {/* Plugins popover */}
+      {pluginsOpen && (
+        <>
+          <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setPluginsOpen(false)} />
+          <div
+            className="absolute"
+            style={{
+              bottom: '100%', right: 16, marginBottom: 8, width: 380, maxHeight: 440,
+              overflowY: 'auto', zIndex: 50,
+              background: 'var(--c-card)', border: '1px solid var(--c-border)',
+              borderRadius: 12, padding: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+          >
+            <div className="flex items-center justify-end" style={{ marginBottom: 4 }}>
+              <button
+                onClick={() => setPluginsOpen(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--c-muted)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}
+                title="Close"
+              >✕</button>
+            </div>
+            <PluginsPanel />
           </div>
         </>
       )}
@@ -395,6 +422,8 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
                 {[
                   { label: 'Add files', stroke: 'var(--c-accent)', onClick: () => setKbOpen(true),
                     icon: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></> },
+                  { label: 'Plugins', stroke: 'var(--c-accent)', onClick: () => setPluginsOpen(true),
+                    icon: <><path d="M6 3v4M10 3v4M4 7h8v3a4 4 0 0 1-8 0V7zM8 14v4"/></> },
                   { label: 'Screenshot', stroke: 'var(--c-accent)', onClick: captureScreen,
                     icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
                   ...(onToggleTerminal ? [{
@@ -421,9 +450,9 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
           <button
             className="btn-icon w-9 h-9 rounded-lg flex-shrink-0"
             style={{
-              background: (toolsOpen || kbOpen || pendingImage || terminalOpen) ? 'rgba(0,212,255,0.12)' : 'transparent',
-              border: (toolsOpen || kbOpen || pendingImage || terminalOpen) ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
-              color: (toolsOpen || kbOpen || pendingImage || terminalOpen) ? 'var(--c-accent)' : 'var(--c-muted)',
+              background: (toolsOpen || kbOpen || pluginsOpen || pendingImage || terminalOpen) ? 'rgba(0,212,255,0.12)' : 'transparent',
+              border: (toolsOpen || kbOpen || pluginsOpen || pendingImage || terminalOpen) ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
+              color: (toolsOpen || kbOpen || pluginsOpen || pendingImage || terminalOpen) ? 'var(--c-accent)' : 'var(--c-muted)',
               transition: 'all 0.15s',
             }}
             onClick={() => setToolsOpen((o) => !o)}
