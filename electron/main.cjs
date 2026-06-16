@@ -2712,6 +2712,11 @@ async function runOllama(sender, streamId, state, messages, model, baseURL, imag
         model: activeModel,
         messages: msgs,
         stream: true,
+        // Keep the model resident in memory between messages. Ollama unloads after 5 min
+        // idle by default, so every message cold-loads the weights from disk — a 30b model
+        // can take minutes just to answer "hello". Recent Ollama honors keep_alive on the
+        // OpenAI endpoint; older builds ignore the unknown field harmlessly.
+        keep_alive: settings?.providers?.ollama?.keepAlive || '30m',
         temperature: settings?.chat?.temperature ?? 0.7,
         ...(settings?.chat?.unlimitedTokens ? {} : { max_tokens: currentAgentMode ? 32768 : (settings?.chat?.maxTokens || 4096) }),
         ...(supportsTools ? { tools: toOpenAITools(currentAgentMode ? AGENT_TOOLS : TOOLS) } : {}),
