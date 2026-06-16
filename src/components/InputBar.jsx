@@ -4,7 +4,7 @@ import { FAST_MODELS, FAST_MODEL_LABELS } from './HUD.jsx';
 import KnowledgePanel from './KnowledgePanel.jsx';
 import PluginsPanel from './PluginsPanel.jsx';
 
-const MODELS = {
+export const MODELS = {
   anthropic: [
     { id: 'claude-opus-4-8',           label: 'Claude Opus 4' },
     { id: 'claude-sonnet-4-6',         label: 'Claude Sonnet 4' },
@@ -50,6 +50,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   const {
     settings, setSettings, streaming, fastMode, agentMode, setAgentMode, agentDir,
     draft: text, setDraft: setText, pendingImage, setPendingImage,
+    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen,
   } = useStore();
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
@@ -424,6 +425,14 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
                     icon: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></> },
                   { label: 'Plugins', stroke: 'var(--c-accent)', onClick: () => setPluginsOpen(true),
                     icon: <><path d="M6 3v4M10 3v4M4 7h8v3a4 4 0 0 1-8 0V7zM8 14v4"/></> },
+                  { label: 'Code editor', stroke: 'var(--c-accent)', onClick: () => setEditorOpen(true),
+                    icon: <><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></> },
+                  { label: 'Notepad', stroke: 'var(--c-accent)', onClick: () => setNotepadOpen(true),
+                    icon: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></> },
+                  { label: 'Compare models', stroke: 'var(--c-accent)', onClick: () => setCompareOpen(true),
+                    icon: <><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></> },
+                  { label: 'Image editor', stroke: 'var(--c-accent)', onClick: () => setImageEditorOpen(true),
+                    icon: <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></> },
                   { label: 'Screenshot', stroke: 'var(--c-accent)', onClick: captureScreen,
                     icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
                   ...(onToggleTerminal ? [{

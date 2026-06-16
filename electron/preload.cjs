@@ -55,6 +55,17 @@ contextBridge.exposeInMainWorld('zeus', {
   pluginRemove:  (slug)    => ipcRenderer.invoke('zeus:plugin-remove', slug),
   pluginToggle:  (slug, on) => ipcRenderer.invoke('zeus:plugin-toggle', { slug, on }),
 
+  // Code editor: filesystem access
+  editorListDir:   (dirPath)         => ipcRenderer.invoke('zeus:editor-list-dir', dirPath),
+  editorReadFile:  (filePath)        => ipcRenderer.invoke('zeus:editor-read-file', filePath),
+  editorWriteFile: (filePath, content) => ipcRenderer.invoke('zeus:editor-write-file', { path: filePath, content }),
+  editorOpenImage: ()                  => ipcRenderer.invoke('zeus:editor-open-image'),
+  editorSaveImage: (dataUrl, defaultName) => ipcRenderer.invoke('zeus:editor-save-image', { dataUrl, defaultName }),
+
+  // Image generation (ComfyUI)
+  imagegenStatus:   ()       => ipcRenderer.invoke('zeus:imagegen-status'),
+  imagegenGenerate: (params) => ipcRenderer.invoke('zeus:imagegen-generate', params),
+
   // Embedded terminal
   terminalExec: (cmd) => ipcRenderer.invoke('zeus:terminal-exec', { command: cmd }),
   terminalCwd:  ()    => ipcRenderer.invoke('zeus:terminal-cwd'),

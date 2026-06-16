@@ -81,6 +81,15 @@ const DEFAULT_SETTINGS = {
     responseLanguage:   'auto',
     streamingEnabled:   true,
   },
+  imageGen: {
+    baseURL:   'http://127.0.0.1:8188', // ComfyUI server
+    steps:     25,
+    cfg:       7,
+    width:     512,
+    height:    512,
+    sampler:   'euler',
+    scheduler: 'normal',
+  },
   system: {
     shell:           'powershell',
     alwaysOnTop:     false,
@@ -607,6 +616,171 @@ ipcMain.handle('zeus:system-stats', async () => {
 let terminalCwd = os.homedir();
 
 ipcMain.handle('zeus:terminal-cwd', () => terminalCwd);
+
+// ── Code editor: filesystem access ───────────────────────────────────────────
+// Skip noise dirs when listing a project tree so big repos stay snappy.
+const EDITOR_IGNORE = new Set(['node_modules', '.git', 'dist', 'release', '.cache', '.next', 'out']);
+
+ipcMain.handle('zeus:editor-list-dir', (_, dirPath) => {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    return entries
+      .filter(e => !EDITOR_IGNORE.has(e.name))
+      .map(e => ({
+        name: e.name,
+        path: path.join(dirPath, e.name),
+        isDir: e.isDirectory(),
+      }))
+      .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:editor-read-file', (_, filePath) => {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > 5 * 1024 * 1024) return { error: 'File too large (>5MB)' };
+    return { content: fs.readFileSync(filePath, 'utf-8') };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:editor-write-file', (_, { path: filePath, content }) => {
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf-8');
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ── Image editor: open/save raster images as base64 data URLs ─────────────────
+const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp' };
+
+ipcMain.handle('zeus:editor-open-image', async () => {
+  try {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: 'Open image',
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
+    });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const filePath = res.filePaths[0];
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    const buf = fs.readFileSync(filePath);
+    return {
+      path: filePath,
+      name: path.basename(filePath),
+      dataUrl: `data:${IMG_MIME[ext] || 'image/png'};base64,${buf.toString('base64')}`,
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ── Image generation via local ComfyUI ───────────────────────────────────────
+function comfyBase() {
+  return (settings?.imageGen?.baseURL || 'http://127.0.0.1:8188').replace(/\/$/, '');
+}
+
+// Is ComfyUI reachable, and what checkpoints does it have?
+ipcMain.handle('zeus:imagegen-status', async () => {
+  try {
+    const r = await fetch(`${comfyBase()}/object_info/CheckpointLoaderSimple`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return { ok: false, error: `ComfyUI returned ${r.status}` };
+    const info = await r.json();
+    const checkpoints = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [];
+    return { ok: true, checkpoints };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Build a standard txt2img workflow graph for the ComfyUI /prompt API.
+function buildComfyWorkflow({ prompt, negative, ckpt, steps, cfg, width, height, sampler, scheduler, seed }) {
+  return {
+    '3': { class_type: 'KSampler', inputs: { seed, steps, cfg, sampler_name: sampler, scheduler, denoise: 1,
+      model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+    '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+    '5': { class_type: 'EmptyLatentImage', inputs: { width, height, batch_size: 1 } },
+    '6': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['4', 1] } },
+    '7': { class_type: 'CLIPTextEncode', inputs: { text: negative || '', clip: ['4', 1] } },
+    '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+    '9': { class_type: 'SaveImage', inputs: { filename_prefix: 'zeus', images: ['8', 0] } },
+  };
+}
+
+ipcMain.handle('zeus:imagegen-generate', async (event, params) => {
+  const base = comfyBase();
+  const cfg = settings?.imageGen || {};
+  const workflow = buildComfyWorkflow({
+    prompt:    params.prompt,
+    negative:  params.negative,
+    ckpt:      params.ckpt,
+    steps:     params.steps   ?? cfg.steps   ?? 25,
+    cfg:       params.cfg      ?? cfg.cfg     ?? 7,
+    width:     params.width   ?? cfg.width   ?? 512,
+    height:    params.height  ?? cfg.height  ?? 512,
+    sampler:   params.sampler  ?? cfg.sampler ?? 'euler',
+    scheduler: params.scheduler ?? cfg.scheduler ?? 'normal',
+    seed:      params.seed ?? Math.floor(Math.random() * 1e15),
+  });
+
+  try {
+    const clientId = 'zeus-' + Date.now();
+    const post = await fetch(`${base}/prompt`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+    });
+    if (!post.ok) return { error: `ComfyUI rejected the job (${post.status}): ${(await post.text()).slice(0, 200)}` };
+    const { prompt_id } = await post.json();
+    if (!prompt_id) return { error: 'ComfyUI did not return a prompt id' };
+
+    // Poll history until the job produces output (timeout ~3 min).
+    const deadline = Date.now() + 180000;
+    let outImage = null;
+    while (Date.now() < deadline) {
+      if (event.sender.isDestroyed?.()) return { error: 'cancelled' };
+      await new Promise(r => setTimeout(r, 1000));
+      const hr = await fetch(`${base}/history/${prompt_id}`);
+      if (!hr.ok) continue;
+      const hist = await hr.json();
+      const entry = hist?.[prompt_id];
+      if (!entry) continue;
+      const images = entry.outputs?.['9']?.images;
+      if (images?.length) { outImage = images[0]; break; }
+      if (entry.status?.status_str === 'error') return { error: 'ComfyUI workflow error — check the ComfyUI console.' };
+    }
+    if (!outImage) return { error: 'Timed out waiting for ComfyUI (3 min).' };
+
+    const q = new URLSearchParams({ filename: outImage.filename, subfolder: outImage.subfolder || '', type: outImage.type || 'output' });
+    const ir = await fetch(`${base}/view?${q}`);
+    if (!ir.ok) return { error: `Failed to fetch generated image (${ir.status})` };
+    const buf = Buffer.from(await ir.arrayBuffer());
+    return { dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:editor-save-image', async (_, { dataUrl, defaultName }) => {
+  try {
+    const res = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save image',
+      defaultPath: defaultName || 'edited.png',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    });
+    if (res.canceled || !res.filePath) return { canceled: true };
+    const base64 = String(dataUrl).replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(res.filePath, Buffer.from(base64, 'base64'));
+    return { path: res.filePath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
 
 ipcMain.handle('zeus:terminal-exec', async (_, { command }) => {
   if (!command.trim()) return { stdout: '', stderr: '', exitCode: 0, cwd: terminalCwd };
@@ -1987,6 +2161,12 @@ function getZeusSystem() {
 Personality: Efficient, confident, slightly formal, occasionally witty. Address the user as "${settings.userName}" unless told otherwise. Be direct and concise — no filler. When using tools, briefly narrate what you're doing.
 
 Capabilities: PC control (files, apps, commands, clipboard, screenshots), web search, weather, HTTP requests to any API (GitHub, Spotify, Home Assistant, etc.), desktop notifications, reminders, and persistent memory across all conversations.
+
+TOOL DISCIPLINE (critical):
+1. Call a tool ONLY when the user's request clearly requires that exact action. If a normal text reply answers the question, reply in text — call NO tool.
+2. Questions about your abilities ("can you...", "do you...", "are you able to...") are conversation — answer in text. Do NOT call a tool to demonstrate.
+3. Never substitute a tool: if you cannot do what was asked (e.g. no image-generation tool exists), say so plainly. Do NOT run an unrelated tool (screenshot, clipboard, get_datetime) as a stand-in.
+4. One thought per turn: never chain tools hoping one fits. Pick the single correct tool or none.
 
 MEMORY RULES:
 1. Use memory_store ONLY when the user explicitly asks you to remember something, or when they share information they clearly want saved (name, job, city, project path, API keys). Do NOT call it on casual greetings or small talk.

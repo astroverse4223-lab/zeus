@@ -130,6 +130,36 @@ const useStore = create(
       settingsOpen: false,
       setSettingsOpen(v) { set({ settingsOpen: v }); },
 
+      editorOpen: false,
+      setEditorOpen(v) { set({ editorOpen: v }); },
+
+      compareOpen: false,
+      setCompareOpen(v) { set({ compareOpen: v }); },
+
+      imageEditorOpen: false,
+      setImageEditorOpen(v) { set({ imageEditorOpen: v }); },
+      imageEditorSource: null, // optional dataUrl to load instead of the file dialog
+      setImageEditorSource(v) { set({ imageEditorSource: v }); },
+
+      imageGenOpen: false,
+      setImageGenOpen(v) { set({ imageGenOpen: v }); },
+
+      // ── Notepad ────────────────────────────────────────────────────────────────
+      notepadOpen: false,
+      setNotepadOpen(v) { set({ notepadOpen: v }); },
+      notes: [], // { id, title, body, updatedAt }
+      addNote() {
+        const note = { id: uuid(), title: 'Untitled', body: '', updatedAt: Date.now() };
+        set(s => ({ notes: [note, ...s.notes] }));
+        return note.id;
+      },
+      updateNote(id, patch) {
+        set(s => ({ notes: s.notes.map(n => n.id === id ? { ...n, ...patch, updatedAt: Date.now() } : n) }));
+      },
+      deleteNote(id) {
+        set(s => ({ notes: s.notes.filter(n => n.id !== id) }));
+      },
+
       sidebarOpen: true,
       setSidebarOpen(v) { set({ sidebarOpen: v }); },
 
@@ -176,6 +206,7 @@ const useStore = create(
         sidebarOpen: s.sidebarOpen,
         agentDir: s.agentDir,
         soundEnabled: s.soundEnabled,
+        notes: s.notes,
       }),
     }
   )

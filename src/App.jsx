@@ -8,6 +8,10 @@ import Sidebar from './components/Sidebar.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import Settings from './components/Settings.jsx';
 import AgentLauncher from './components/AgentLauncher.jsx';
+import CodeEditor from './components/CodeEditor.jsx';
+import Notepad from './components/Notepad.jsx';
+import ModelCompare from './components/ModelCompare.jsx';
+import ImageEditor from './components/ImageEditor.jsx';
 import BootSequence from './components/BootSequence.jsx';
 import useWakeWord from './hooks/useWakeWord.js';
 import { speak, stopSpeaking } from './lib/speech.js';
@@ -17,6 +21,10 @@ export default function App() {
   const {
     settings, setSettings,
     settingsOpen,
+    editorOpen, setEditorOpen,
+    notepadOpen, setNotepadOpen,
+    compareOpen, setCompareOpen,
+    imageEditorOpen, setImageEditorOpen,
     sidebarOpen,
     activeId, getActive,
     newConversation,
@@ -426,6 +434,26 @@ export default function App() {
             }}
           />
         )}
+      </AnimatePresence>
+
+      {/* Code editor — full-screen overlay */}
+      <AnimatePresence>
+        {editorOpen && <CodeEditor key="code-editor" onClose={() => setEditorOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Notepad — full-screen overlay */}
+      <AnimatePresence>
+        {notepadOpen && <Notepad key="notepad" onClose={() => setNotepadOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Model compare — full-screen overlay */}
+      <AnimatePresence>
+        {compareOpen && <ModelCompare key="model-compare" onClose={() => setCompareOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Image editor — full-screen overlay */}
+      <AnimatePresence>
+        {imageEditorOpen && <ImageEditor key="image-editor" onClose={() => setImageEditorOpen(false)} />}
       </AnimatePresence>
 
       <AnimatePresence>
