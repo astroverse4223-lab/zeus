@@ -28,6 +28,7 @@ export default function App() {
   const unsubRef = useRef(null);
   const streamIdRef = useRef(null);
   const handleSendRef = useRef(null);
+  const streamTextRef = useRef(''); // accumulates streamed reply text without re-scanning the store per chunk
 
   const [agentLauncherOpen, setAgentLauncherOpen] = useState(false);
   const [booting, setBooting] = useState(true);
@@ -178,6 +179,7 @@ export default function App() {
 
     const streamId = uuid();
     streamIdRef.current = streamId;
+    streamTextRef.current = '';
 
     if (!window.zeus) {
       updateMessage(convId, aiMsgId, {
@@ -194,14 +196,12 @@ export default function App() {
       if (chunk.streamId !== streamId) return;
 
       if (chunk.type === 'text') {
-        updateMessage(convId, aiMsgId, {
-          content: (useStore.getState().conversations
-            .find(c => c.id === convId)?.messages
-            .find(m => m.id === aiMsgId)?.content || '') + chunk.text,
-        });
+        streamTextRef.current += chunk.text;
+        updateMessage(convId, aiMsgId, { content: streamTextRef.current });
       }
 
       if (chunk.type === 'replace') {
+        streamTextRef.current = chunk.text;
         updateMessage(convId, aiMsgId, { content: chunk.text });
       }
 

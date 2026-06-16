@@ -13,6 +13,16 @@ const _execBase = promisify(exec);
 // Always hide the console window on Windows so no CMD popup appears
 const execAsync = (cmd, opts = {}) => _execBase(cmd, { windowsHide: true, ...opts });
 
+// ─── Crash guards ──────────────────────────────────────────────────────────────
+// A stray rejection from an LLM SDK, network blip, or telegram poll must NEVER take
+// the whole app down. Log and keep running instead of crashing the main process.
+process.on('unhandledRejection', (reason) => {
+  console.error('[Zeus unhandledRejection]', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Zeus uncaughtException]', err?.message || err);
+});
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'zeus-settings.json');
@@ -2075,15 +2085,35 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
     }
   }
 
-  // Proxy sender: forwards to main window AND updates mini-HUD with streaming state
+  // Proxy sender: forwards to main window AND updates mini-HUD with streaming state.
+  // Text deltas are coalesced and flushed on a short timer so a fast big-model stream
+  // doesn't fire one IPC message (and one React re-render) per token — that flood was
+  // the main source of UI lag and freezes on large models.
   let accText = '';
+  let textBuf = '';
+  let flushTimer = null;
+  const flushText = () => {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    if (textBuf && !rawSender.isDestroyed()) {
+      rawSender.send('zeus:chunk', { streamId, type: 'text', text: textBuf });
+    }
+    textBuf = '';
+  };
   const sender = {
     send(channel, data) {
-      rawSender.send(channel, data);
       if (channel === 'zeus:chunk' && data.streamId === streamId) {
-        if (data.type === 'text') accText += data.text;
+        if (data.type === 'text') {
+          accText += data.text;
+          textBuf += data.text;
+          if (!flushTimer) flushTimer = setTimeout(flushText, 40);
+          return;
+        }
         if (data.type === 'replace') accText = data.text;
+        // Any non-text chunk (tool_start/result, screenshot…) must appear after the
+        // text streamed so far — flush the buffer first to preserve ordering.
+        flushText();
       }
+      rawSender.send(channel, data);
     },
     isDestroyed: () => rawSender.isDestroyed(),
   };
@@ -2114,6 +2144,7 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
     console.error('[Zeus AI Error]', err.message);
     sender.send('zeus:chunk', { streamId, type: 'error', error: err.message });
   } finally {
+    flushText(); // emit any buffered text before signalling done
     activeStreams.delete(streamId);
     if (!rawSender.isDestroyed()) rawSender.send('zeus:chunk', { streamId, type: 'done' });
     // Update mini-HUD with final response text
@@ -2125,6 +2156,12 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
 });
 
 // ─── Anthropic ────────────────────────────────────────────────────────────────
+
+// Large models can take a long time to stream (esp. agent mode with 32k output) and
+// transient 429/5xx/network blips were timing out the whole request. Give the SDKs a
+// generous per-request timeout and a couple of automatic retries.
+const LLM_TIMEOUT_MS = 600000; // 10 min — covers slow big-model streams
+const LLM_MAX_RETRIES = 2;
 
 const AGENT_CONTINUE_MSG = '[AGENT CONTINUE] The task is not finished. Call get_directory_tree on the working directory to see what exists, then call write_file for each remaining file with its COMPLETE content. Do not output code as text. Do not ask questions. Keep building.';
 
@@ -2160,7 +2197,7 @@ function expandHistoryForAnthropic(messages) {
 
 async function runAnthropic(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { Anthropic } = require('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES });
 
   let msgs = expandHistoryForAnthropic(messages);
   let toolCallCount = 0;
@@ -2345,7 +2382,7 @@ function expandHistoryForOpenAI(messages) {
 
 async function runOpenAI(sender, streamId, state, messages, model, apiKey, imageBase64) {
   const { OpenAI } = require('openai');
-  const client = new OpenAI({ apiKey });
+  const client = new OpenAI({ apiKey, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES });
 
   let msgs = [
     { role: 'system', content: getZeusSystem() },
@@ -2521,7 +2558,7 @@ async function runGemini(sender, streamId, state, messages, model, apiKey, image
       temperature: settings?.chat?.temperature ?? 0.7,
       maxOutputTokens: currentAgentMode ? 8192 : (settings?.chat?.maxTokens || 4096),
     },
-  });
+  }, { timeout: LLM_TIMEOUT_MS });
   let toolCallCount = 0;
   let agentContinues = 0;
 
@@ -2641,7 +2678,7 @@ const ollamaNoToolsModels = new Set();
 
 async function runOllama(sender, streamId, state, messages, model, baseURL, imageBase64) {
   const { OpenAI } = require('openai');
-  const client = new OpenAI({ apiKey: 'ollama', baseURL });
+  const client = new OpenAI({ apiKey: 'ollama', baseURL, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES });
 
   let msgs = [
     { role: 'system', content: getZeusSystem() },

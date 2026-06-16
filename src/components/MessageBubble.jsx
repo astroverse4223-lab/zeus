@@ -210,12 +210,16 @@ function ThinkingBar({ message }) {
   );
 }
 
-export default function MessageBubble({ message }) {
+function MessageBubble({ message }) {
   const isUser = message.role === 'user';
   const [msgCopied, setMsgCopied] = useState(false);
   const [finishedAt, setFinishedAt] = useState(null);
 
-  const { speakingMsgId, setSpeaking, settings } = useStore();
+  // Subscribe to narrow slices (not the whole store) so a bubble only re-renders when
+  // its own data changes — otherwise every bubble re-rendered on every streamed token.
+  const speakingMsgId = useStore(s => s.speakingMsgId);
+  const setSpeaking = useStore(s => s.setSpeaking);
+  const settings = useStore(s => s.settings);
   const isThisSpeaking = speakingMsgId === message.id;
   const speakThis = () => {
     if (isThisSpeaking) { stopSpeaking(); setSpeaking(false, null); return; }
@@ -410,3 +414,8 @@ export default function MessageBubble({ message }) {
     </div>
   );
 }
+
+// Memoized: ChatWindow maps every message through this. Without memo, appending a token
+// to the streaming bubble re-rendered all bubbles. Now only the bubble whose `message`
+// object actually changed re-renders.
+export default React.memo(MessageBubble);
