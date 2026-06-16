@@ -53,6 +53,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [ollamaInstalled, setOllamaInstalled] = useState([]); // real installed models from `ollama list`
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -72,6 +73,17 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
 
   // Focus on mount
   useEffect(() => { textareaRef.current?.focus(); }, []);
+
+  // Load the list of locally-installed Ollama models so the picker shows what the user
+  // actually has (instead of a hardcoded guess). Refreshes whenever Ollama is selected.
+  useEffect(() => {
+    if (provider !== 'ollama' || !window.zeus?.ollamaModels) { setOllamaInstalled([]); return; }
+    let alive = true;
+    window.zeus.ollamaModels()
+      .then(res => { if (alive) setOllamaInstalled((res?.models || []).map(m => m.name).filter(Boolean)); })
+      .catch(() => { if (alive) setOllamaInstalled([]); });
+    return () => { alive = false; };
+  }, [provider]);
 
   // Turning agent mode on the first time (no directory yet) opens the setup modal.
   const enableAgent = () => {
@@ -272,7 +284,8 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
           </div>
         ) : (
           <div className="relative">
-            {provider === 'ollama' ? (
+            {provider === 'ollama' && ollamaInstalled.length === 0 ? (
+              // Ollama not running or no models pulled — let the user type a name manually.
               <input
                 type="text"
                 className="text-xs rounded-md px-2 py-1 outline-none"
@@ -292,19 +305,26 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
                 style={{
                   background: 'var(--c-card)', border: '1px solid var(--c-border)',
                   color: 'var(--c-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px',
+                  maxWidth: '170px',
                 }}
                 value={model}
                 onChange={e => changeModel(e.target.value)}
               >
-                {modelList.map(m => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
+                {provider === 'ollama'
+                  ? (
+                    <>
+                      {/* Keep the configured model selectable even if it's not currently installed */}
+                      {model && !ollamaInstalled.includes(model) && <option value={model}>{model} (not installed)</option>}
+                      {ollamaInstalled.map(name => <option key={name} value={name}>{name}</option>)}
+                    </>
+                  )
+                  : modelList.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
               </select>
             )}
             <datalist id="ollama-models">
               {MODELS.ollama.map(m => <option key={m.id} value={m.id} />)}
             </datalist>
-            {provider !== 'ollama' && (
+            {!(provider === 'ollama' && ollamaInstalled.length === 0) && (
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                 style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-muted)', pointerEvents: 'none' }}>
                 <polyline points="6 9 12 15 18 9" />
