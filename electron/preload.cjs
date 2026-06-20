@@ -62,9 +62,21 @@ contextBridge.exposeInMainWorld('zeus', {
   editorOpenImage: ()                  => ipcRenderer.invoke('zeus:editor-open-image'),
   editorSaveImage: (dataUrl, defaultName) => ipcRenderer.invoke('zeus:editor-save-image', { dataUrl, defaultName }),
 
+  // Code editor: new project scaffolding
+  projectNew: (parentDir, name, initGit) => ipcRenderer.invoke('zeus:project-new', { parentDir, name, initGit }),
+
+  // Code editor: git integration
+  gitStatus:  (dir)               => ipcRenderer.invoke('zeus:git-status', dir),
+  gitStage:   (dir, paths)        => ipcRenderer.invoke('zeus:git-stage', { dir, paths }),
+  gitUnstage: (dir, paths)        => ipcRenderer.invoke('zeus:git-unstage', { dir, paths }),
+  gitDiscard: (dir, paths)        => ipcRenderer.invoke('zeus:git-discard', { dir, paths }),
+  gitCommit:  (dir, message)      => ipcRenderer.invoke('zeus:git-commit', { dir, message }),
+  gitDiff:    (dir, file, staged) => ipcRenderer.invoke('zeus:git-diff', { dir, file, staged }),
+
   // Image generation (ComfyUI)
   imagegenStatus:   ()       => ipcRenderer.invoke('zeus:imagegen-status'),
   imagegenGenerate: (params) => ipcRenderer.invoke('zeus:imagegen-generate', params),
+  imagegenGenerateHosted: (params) => ipcRenderer.invoke('zeus:imagegen-generate-hosted', params),
 
   // Embedded terminal
   terminalExec: (cmd) => ipcRenderer.invoke('zeus:terminal-exec', { command: cmd }),

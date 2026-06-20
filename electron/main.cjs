@@ -7,9 +7,10 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { exec, spawn } = require('child_process');
+const { exec, spawn, execFile } = require('child_process');
 const { promisify } = require('util');
 const _execBase = promisify(exec);
+const execFileAsync = promisify(execFile);
 // Always hide the console window on Windows so no CMD popup appears
 const execAsync = (cmd, opts = {}) => _execBase(cmd, { windowsHide: true, ...opts });
 
@@ -657,6 +658,74 @@ ipcMain.handle('zeus:editor-write-file', (_, { path: filePath, content }) => {
   }
 });
 
+// ── Code editor: new project scaffolding ───────────────────────────────────────
+ipcMain.handle('zeus:project-new', async (_, { parentDir, name, initGit }) => {
+  try {
+    const projectDir = path.join(parentDir, name);
+    if (fs.existsSync(projectDir)) return { error: 'A folder with that name already exists' };
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'README.md'), `# ${name}\n`, 'utf-8');
+    if (initGit) await execFileAsync('git', ['init'], { cwd: projectDir });
+    return { ok: true, dir: projectDir };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ── Code editor: git integration ────────────────────────────────────────────────
+async function runGit(args, cwd) {
+  try {
+    const { stdout, stderr } = await execFileAsync('git', args, { cwd, windowsHide: true });
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    return { code: err.code ?? 1, stdout: err.stdout || '', stderr: err.stderr || err.message };
+  }
+}
+
+ipcMain.handle('zeus:git-status', async (_, dir) => {
+  const branchRes = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir);
+  if (branchRes.code !== 0) return { ok: false, error: branchRes.stderr.includes('not a git repository') ? 'not a git repository' : branchRes.stderr };
+  const statusRes = await runGit(['status', '--porcelain=v1'], dir);
+  const staged = [], unstaged = [], untracked = [];
+  for (const line of statusRes.stdout.split('\n')) {
+    if (!line) continue;
+    const x = line[0], y = line[1];
+    const file = line.slice(3);
+    if (x === '?' && y === '?') untracked.push(file);
+    else {
+      if (x !== ' ' && x !== '?') staged.push(file);
+      if (y !== ' ' && y !== '?') unstaged.push(file);
+    }
+  }
+  return { ok: true, branch: branchRes.stdout.trim(), staged, unstaged, untracked };
+});
+
+ipcMain.handle('zeus:git-stage', async (_, { dir, paths }) => {
+  const r = await runGit(['add', '--', ...paths], dir);
+  return r.code === 0 ? { ok: true } : { error: r.stderr };
+});
+
+ipcMain.handle('zeus:git-unstage', async (_, { dir, paths }) => {
+  const r = await runGit(['reset', 'HEAD', '--', ...paths], dir);
+  return r.code === 0 ? { ok: true } : { error: r.stderr };
+});
+
+ipcMain.handle('zeus:git-discard', async (_, { dir, paths }) => {
+  const r = await runGit(['checkout', '--', ...paths], dir);
+  return r.code === 0 ? { ok: true } : { error: r.stderr };
+});
+
+ipcMain.handle('zeus:git-commit', async (_, { dir, message }) => {
+  const r = await runGit(['commit', '-m', message], dir);
+  return r.code === 0 ? { ok: true } : { error: r.stderr || r.stdout };
+});
+
+ipcMain.handle('zeus:git-diff', async (_, { dir, file, staged }) => {
+  const args = ['diff', ...(staged ? ['--staged'] : []), '--', file];
+  const r = await runGit(args, dir);
+  return r.code === 0 ? { ok: true, diff: r.stdout } : { error: r.stderr };
+});
+
 // ── Image editor: open/save raster images as base64 data URLs ─────────────────
 const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp' };
 
@@ -761,6 +830,25 @@ ipcMain.handle('zeus:imagegen-generate', async (event, params) => {
     if (!ir.ok) return { error: `Failed to fetch generated image (${ir.status})` };
     const buf = Buffer.from(await ir.arrayBuffer());
     return { dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Image generation via a hosted API (OpenAI), for users who don't run ComfyUI locally.
+ipcMain.handle('zeus:imagegen-generate-hosted', async (_, { prompt, size, apiKey }) => {
+  if (!apiKey) return { error: 'Missing OpenAI API key' };
+  try {
+    const r = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'dall-e-3', prompt, size: size || '1024x1024', n: 1, response_format: 'b64_json' }),
+    });
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) return { error: json?.error?.message || `OpenAI returned ${r.status}` };
+    const b64 = json?.data?.[0]?.b64_json;
+    if (!b64) return { error: 'OpenAI did not return image data' };
+    return { dataUrl: `data:image/png;base64,${b64}` };
   } catch (err) {
     return { error: err.message };
   }

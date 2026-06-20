@@ -50,7 +50,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   const {
     settings, setSettings, streaming, fastMode, agentMode, setAgentMode, agentDir,
     draft: text, setDraft: setText, pendingImage, setPendingImage,
-    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen,
+    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen, setImageGenOpen,
   } = useStore();
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
@@ -433,6 +433,8 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
                     icon: <><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></> },
                   { label: 'Image editor', stroke: 'var(--c-accent)', onClick: () => setImageEditorOpen(true),
                     icon: <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></> },
+                  { label: 'Generate image', stroke: 'var(--c-accent)', onClick: () => setImageGenOpen(true),
+                    icon: <><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></> },
                   { label: 'Screenshot', stroke: 'var(--c-accent)', onClick: captureScreen,
                     icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
                   ...(onToggleTerminal ? [{

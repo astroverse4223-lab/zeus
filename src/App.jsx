@@ -12,6 +12,7 @@ import CodeEditor from './components/CodeEditor.jsx';
 import Notepad from './components/Notepad.jsx';
 import ModelCompare from './components/ModelCompare.jsx';
 import ImageEditor from './components/ImageEditor.jsx';
+import ImageGen from './components/ImageGen.jsx';
 import BootSequence from './components/BootSequence.jsx';
 import useWakeWord from './hooks/useWakeWord.js';
 import { speak, stopSpeaking } from './lib/speech.js';
@@ -25,6 +26,7 @@ export default function App() {
     notepadOpen, setNotepadOpen,
     compareOpen, setCompareOpen,
     imageEditorOpen, setImageEditorOpen,
+    imageGenOpen, setImageGenOpen,
     sidebarOpen,
     activeId, getActive,
     newConversation,
@@ -454,6 +456,11 @@ export default function App() {
       {/* Image editor — full-screen overlay */}
       <AnimatePresence>
         {imageEditorOpen && <ImageEditor key="image-editor" onClose={() => setImageEditorOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Image generator — full-screen overlay */}
+      <AnimatePresence>
+        {imageGenOpen && <ImageGen key="image-gen" onClose={() => setImageGenOpen(false)} />}
       </AnimatePresence>
 
       <AnimatePresence>
