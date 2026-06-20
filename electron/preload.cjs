@@ -61,6 +61,10 @@ contextBridge.exposeInMainWorld('zeus', {
   editorWriteFile: (filePath, content) => ipcRenderer.invoke('zeus:editor-write-file', { path: filePath, content }),
   editorOpenImage: ()                  => ipcRenderer.invoke('zeus:editor-open-image'),
   editorSaveImage: (dataUrl, defaultName) => ipcRenderer.invoke('zeus:editor-save-image', { dataUrl, defaultName }),
+  editorCreateFile: (dirPath, name) => ipcRenderer.invoke('zeus:editor-create-file', { dirPath, name }),
+  editorCreateDir:  (dirPath, name) => ipcRenderer.invoke('zeus:editor-create-dir', { dirPath, name }),
+  editorRename:     (oldPath, newName) => ipcRenderer.invoke('zeus:editor-rename', { oldPath, newName }),
+  editorDelete:     (targetPath) => ipcRenderer.invoke('zeus:editor-delete', targetPath),
 
   // Code editor: new project scaffolding
   projectNew: (parentDir, name, initGit) => ipcRenderer.invoke('zeus:project-new', { parentDir, name, initGit }),
@@ -72,6 +76,10 @@ contextBridge.exposeInMainWorld('zeus', {
   gitDiscard: (dir, paths)        => ipcRenderer.invoke('zeus:git-discard', { dir, paths }),
   gitCommit:  (dir, message)      => ipcRenderer.invoke('zeus:git-commit', { dir, message }),
   gitDiff:    (dir, file, staged) => ipcRenderer.invoke('zeus:git-diff', { dir, file, staged }),
+
+  // Code editor: Live Server
+  liveserverStart: (dir) => ipcRenderer.invoke('zeus:liveserver-start', dir),
+  liveserverStop:  ()    => ipcRenderer.invoke('zeus:liveserver-stop'),
 
   // Image generation (ComfyUI)
   imagegenStatus:   ()       => ipcRenderer.invoke('zeus:imagegen-status'),

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import FilerobotImageEditor, { TABS, TOOLS } from 'react-filerobot-image-editor';
 import useStore from '../store/useStore.js';
@@ -19,8 +19,13 @@ export default function ImageEditor({ onClose }) {
 
   // If launched with a handed-off image (e.g. from image gen) use it; otherwise
   // prompt for a file. Clear the hand-off so it doesn't stick on the next open.
+  // Guarded with a ref because StrictMode double-invokes mount effects in dev,
+  // which would otherwise pop the file dialog twice.
+  const openedRef = useRef(false);
   useEffect(() => {
     if (imageEditorSource) { setImageEditorSource(null); return; }
+    if (openedRef.current) return;
+    openedRef.current = true;
     open();
   }, []);
 

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import Editor from '@monaco-editor/react';
 import { langFromPath } from '../lib/monaco.js';
+import { registerEmmet } from '../lib/emmet.js';
+import { isFormattable, formatCode } from '../lib/prettier.js';
 
 // File-type → tiny color dot, so the tree reads at a glance.
 function dotColor(name, isDir) {
@@ -17,23 +19,35 @@ function dotColor(name, isDir) {
 
 const GIT_STATUS_COLOR = { M: 'var(--c-accent)', A: 'var(--c-green)', D: 'var(--c-red)', U: 'var(--c-muted)' };
 
+function dirnameOf(p) {
+  return p.replace(/[\\/][^\\/]*$/, '') || p;
+}
+
 // One node in the file tree. Directories lazy-load their children on expand.
-function TreeNode({ entry, depth, onOpenFile, onSplitFile, activePath }) {
+// Re-fetches its own children when `mutationDir`/`mutationVersion` signal a
+// create/rename/delete happened inside this directory.
+function TreeNode({ entry, depth, onOpenFile, activePath, onContextMenu, mutationDir, mutationVersion }) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await window.zeus?.editorListDir(entry.path);
+    setChildren(Array.isArray(res) ? res : []);
+    setLoading(false);
+  }, [entry.path]);
 
   const toggle = useCallback(async () => {
     if (!entry.isDir) { onOpenFile(entry); return; }
     if (expanded) { setExpanded(false); return; }
     setExpanded(true);
-    if (children === null) {
-      setLoading(true);
-      const res = await window.zeus?.editorListDir(entry.path);
-      setChildren(Array.isArray(res) ? res : []);
-      setLoading(false);
-    }
-  }, [entry, expanded, children, onOpenFile]);
+    if (children === null) await load();
+  }, [entry, expanded, children, onOpenFile, load]);
+
+  useEffect(() => {
+    if (expanded && entry.isDir && mutationDir === entry.path) load();
+  }, [mutationVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isActive = !entry.isDir && entry.path === activePath;
 
@@ -41,7 +55,7 @@ function TreeNode({ entry, depth, onOpenFile, onSplitFile, activePath }) {
     <div>
       <div
         onClick={toggle}
-        onContextMenu={(e) => { e.preventDefault(); if (!entry.isDir) onSplitFile(entry); }}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextMenu(e.clientX, e.clientY, entry); }}
         className="flex items-center gap-1.5 cursor-pointer select-none"
         style={{
           padding: '3px 8px', paddingLeft: 8 + depth * 12,
@@ -49,7 +63,6 @@ function TreeNode({ entry, depth, onOpenFile, onSplitFile, activePath }) {
           background: isActive ? 'rgba(0,212,255,0.10)' : 'transparent',
           borderRadius: 4, transition: 'background 0.1s',
         }}
-        title={entry.isDir ? undefined : 'Click to open · Right-click to open in split'}
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--c-glow)'; }}
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
       >
@@ -67,10 +80,56 @@ function TreeNode({ entry, depth, onOpenFile, onSplitFile, activePath }) {
         <div>
           {loading && <div style={{ paddingLeft: 8 + (depth + 1) * 12, fontSize: 11, color: 'var(--c-muted)' }}>…</div>}
           {children?.map(c => (
-            <TreeNode key={c.path} entry={c} depth={depth + 1} onOpenFile={onOpenFile} onSplitFile={onSplitFile} activePath={activePath} />
+            <TreeNode key={c.path} entry={c} depth={depth + 1} onOpenFile={onOpenFile} activePath={activePath}
+              onContextMenu={onContextMenu} mutationDir={mutationDir} mutationVersion={mutationVersion} />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Right-click context menu (New File/Folder, Open to the Side, Rename, Delete) ──
+function TreeContextMenu({ x, y, entry, onClose, onNewFile, onNewFolder, onOpenSide, onRename, onDelete }) {
+  useEffect(() => {
+    const close = () => onClose();
+    window.addEventListener('click', close);
+    window.addEventListener('blur', close);
+    return () => { window.removeEventListener('click', close); window.removeEventListener('blur', close); };
+  }, [onClose]);
+
+  const items = [];
+  if (!entry || entry.isDir) {
+    items.push(['New File', onNewFile], ['New Folder', onNewFolder]);
+  }
+  if (entry && !entry.isDir) {
+    items.push(['Open to the Side', onOpenSide]);
+  }
+  if (entry) {
+    items.push(['Rename', onRename], ['Delete', onDelete]);
+  }
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="fixed rounded-lg overflow-hidden"
+      style={{
+        left: x, top: y, zIndex: 80, minWidth: 160,
+        background: 'var(--c-card)', border: '1px solid var(--c-border)',
+        boxShadow: '0 10px 34px rgba(0,0,0,0.55)', padding: 4,
+      }}
+    >
+      {items.map(([label, fn]) => (
+        <button key={label} onClick={() => { fn(); onClose(); }}
+          className="w-full text-left rounded-md px-2.5 py-1.5"
+          style={{
+            background: 'transparent', border: 'none', color: label === 'Delete' ? 'var(--c-red)' : 'var(--c-text)',
+            cursor: 'pointer', fontSize: 12,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-glow)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+        >{label}</button>
+      ))}
     </div>
   );
 }
@@ -235,9 +294,37 @@ function NewProjectModal({ onClose, onCreated }) {
   );
 }
 
+// ─── Text-entry modal (Electron doesn't implement window.prompt) ──────────────
+function PromptModal({ title, label, defaultValue, confirmLabel, onSubmit, onCancel }) {
+  const [value, setValue] = useState(defaultValue || '');
+
+  return (
+    <div className="absolute inset-0 z-[70] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onCancel}>
+      <div onClick={e => e.stopPropagation()} className="rounded-xl p-5" style={{ width: 320, background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
+        <p style={{ color: 'var(--c-accent)', fontSize: 11, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.1em', marginBottom: 14 }}>{title}</p>
+        <label style={{ color: 'var(--c-muted)', fontSize: 10, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em', display: 'block', marginBottom: 5 }}>{label}</label>
+        <input autoFocus type="text" value={value} onChange={e => setValue(e.target.value)}
+          onFocus={e => e.target.select()}
+          onKeyDown={e => { if (e.key === 'Enter') onSubmit(value.trim()); else if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } }}
+          style={{ width: '100%', background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 8, color: 'var(--c-text)', fontSize: 12, padding: '7px 9px', marginBottom: 14 }} />
+        <div className="flex gap-2">
+          <button className="btn-icon flex-1" style={{ fontSize: 11, padding: '7px 0', color: 'var(--c-muted)', border: '1px solid var(--c-border)' }} onClick={onCancel}>CANCEL</button>
+          <button className="btn-primary flex-1 rounded-lg" style={{ fontSize: 11, opacity: value.trim() ? 1 : 0.5 }}
+            disabled={!value.trim()} onClick={() => onSubmit(value.trim())}>
+            {confirmLabel || 'OK'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Editor pane (tab strip + Monaco) for one group (main or split) ────────────
-function EditorPane({ tabs, activePath, setActivePath, onChange, onCloseTab, onSave, focused, onFocus, onSplit, allowSplit }) {
+function EditorPane({ tabs, activePath, setActivePath, onChange, onCloseTab, focused, onFocus, onSplit, allowSplit, editorRef }) {
   const activeTab = tabs.find(t => t.path === activePath) || null;
+  const langRef = useRef(activeTab?.lang);
+  langRef.current = activeTab?.lang;
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden" onMouseDown={onFocus} style={{ outline: focused ? '1px solid rgba(0,212,255,0.25)' : 'none', outlineOffset: -1 }}>
       <div className="flex items-stretch flex-shrink-0 overflow-x-auto"
@@ -270,7 +357,8 @@ function EditorPane({ tabs, activePath, setActivePath, onChange, onCloseTab, onS
             path={activeTab.path}
             language={activeTab.lang}
             value={activeTab.content}
-            onChange={onChange}
+            onChange={(v) => onChange(activeTab.path, v)}
+            onMount={(editor, monaco) => { if (editorRef) editorRef.current = editor; registerEmmet(editor, monaco, () => langRef.current); }}
             options={{
               fontSize: 13, fontFamily: 'JetBrains Mono, monospace',
               minimap: { enabled: true }, automaticLayout: true,
@@ -279,7 +367,7 @@ function EditorPane({ tabs, activePath, setActivePath, onChange, onCloseTab, onS
           />
         ) : (
           <div className="flex items-center justify-center h-full" style={{ color: 'var(--c-muted)', fontSize: 13 }}>
-            Open a file from the tree to start editing · Ctrl+S to save
+            Open a file from the tree to start editing · Ctrl+S to save · Type <code>!</code> + Tab for an HTML boilerplate
           </div>
         )}
       </div>
@@ -292,6 +380,18 @@ export default function CodeEditor({ onClose }) {
   const [rootEntries, setRootEntries] = useState([]);
   const [sidebarView, setSidebarView] = useState('explorer'); // 'explorer' | 'git'
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState(null); // { x, y, entry }
+  const [mutation, setMutation] = useState({ dir: null, version: 0 });
+  const [promptState, setPromptState] = useState(null); // { title, label, defaultValue, confirmLabel, onSubmit, onCancel }
+
+  // Replaces window.prompt() — Electron doesn't implement it — with our own modal.
+  const askText = useCallback((opts) => new Promise((resolve) => {
+    setPromptState({
+      ...opts,
+      onSubmit: (v) => { setPromptState(null); resolve(v || null); },
+      onCancel: () => { setPromptState(null); resolve(null); },
+    });
+  }), []);
 
   const [tabs, setTabs]         = useState([]);   // { path, name, content, dirty, lang }
   const [activePath, setActivePath] = useState(null);
@@ -301,22 +401,42 @@ export default function CodeEditor({ onClose }) {
   const [focusedSide, setFocusedSide] = useState('main'); // 'main' | 'split'
 
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewKey, setPreviewKey] = useState(0); // bump to reload iframe
+  const [liveServer, setLiveServer] = useState(null); // { port, url }
+  const [autoSave, setAutoSave] = useState(false);
+
+  const mainEditorRef = useRef(null);
+  const splitEditorRef = useRef(null);
+  const autoSaveTimers = useRef({});
+  const tabsRef = useRef(tabs); tabsRef.current = tabs;
+  const splitTabsRef = useRef(splitTabs); splitTabsRef.current = splitTabs;
+
+  // Make sure the local server doesn't keep running after the editor closes.
+  useEffect(() => () => { window.zeus?.liveserverStop(); }, []);
+
+  const refreshRoot = useCallback(async (dir) => {
+    const res = await window.zeus?.editorListDir(dir);
+    setRootEntries(Array.isArray(res) ? res : []);
+  }, []);
 
   const openFolder = useCallback(async () => {
     const dir = await window.zeus?.pickDirectory();
     if (!dir) return;
     setRootDir(dir);
-    const res = await window.zeus?.editorListDir(dir);
-    setRootEntries(Array.isArray(res) ? res : []);
-  }, []);
+    refreshRoot(dir);
+  }, [refreshRoot]);
 
-  const onProjectCreated = useCallback(async (dir) => {
+  const onProjectCreated = useCallback((dir) => {
     setNewProjectOpen(false);
     setRootDir(dir);
-    const res = await window.zeus?.editorListDir(dir);
-    setRootEntries(Array.isArray(res) ? res : []);
-  }, []);
+    refreshRoot(dir);
+  }, [refreshRoot]);
+
+  // Tell the tree to re-fetch whichever directory changed (root listing refreshes
+  // directly; nested directories refresh themselves via the mutation signal).
+  const notifyDirChanged = useCallback((dir) => {
+    if (dir === rootDir) refreshRoot(rootDir);
+    else setMutation(m => ({ dir, version: m.version + 1 }));
+  }, [rootDir, refreshRoot]);
 
   // Generic "open this entry into a side" — used by the explorer tree, git panel, and split.
   const openFileInto = useCallback(async (side, entry) => {
@@ -357,39 +477,156 @@ export default function CodeEditor({ onClose }) {
     });
   }, [activePath, splitActivePath]);
 
-  const onChange = useCallback((side, value) => {
+  // Saves one tab by path — used by the keyboard shortcut, the Save button, and autosave.
+  // Reads from refs (not the `tabs`/`splitTabs` state directly) so a debounced autosave
+  // always writes the latest content even if several keystrokes landed after it was scheduled.
+  const saveTab = useCallback(async (side, targetPath) => {
+    if (!targetPath) return;
     const isMain = side === 'main';
-    const setT = isMain ? setTabs : setSplitTabs;
-    const curActive = isMain ? activePath : splitActivePath;
-    setT(prev => prev.map(t => t.path === curActive ? { ...t, content: value ?? '', dirty: true } : t));
-  }, [activePath, splitActivePath]);
-
-  const save = useCallback(async () => {
-    const isMain = focusedSide === 'main';
-    const curTabs = isMain ? tabs : splitTabs;
-    const curActive = isMain ? activePath : splitActivePath;
-    const tab = curTabs.find(t => t.path === curActive);
+    const tab = (isMain ? tabsRef.current : splitTabsRef.current).find(t => t.path === targetPath);
     if (!tab || !tab.dirty) return;
     const res = await window.zeus?.editorWriteFile(tab.path, tab.content);
     if (res?.error) { alert(`Save failed: ${res.error}`); return; }
     const setT = isMain ? setTabs : setSplitTabs;
-    setT(prev => prev.map(t => t.path === tab.path ? { ...t, dirty: false } : t));
-    setPreviewKey(k => k + 1); // live-preview refresh on save
+    setT(prev => prev.map(t => (t.path === tab.path && t.content === tab.content) ? { ...t, dirty: false } : t));
+  }, []);
+
+  const save = useCallback(() => {
+    saveTab(focusedSide, focusedSide === 'main' ? activePath : splitActivePath);
+  }, [saveTab, focusedSide, activePath, splitActivePath]);
+
+  const onChange = useCallback((side, path, value) => {
+    const isMain = side === 'main';
+    const setT = isMain ? setTabs : setSplitTabs;
+    setT(prev => prev.map(t => t.path === path ? { ...t, content: value ?? '', dirty: true } : t));
+    if (autoSave) {
+      clearTimeout(autoSaveTimers.current[side]);
+      autoSaveTimers.current[side] = setTimeout(() => saveTab(side, path), 700);
+    }
+  }, [autoSave, saveTab]);
+
+  const formatActive = useCallback(async () => {
+    const isMain = focusedSide === 'main';
+    const curTabs = isMain ? tabs : splitTabs;
+    const curActive = isMain ? activePath : splitActivePath;
+    const tab = curTabs.find(t => t.path === curActive);
+    const editor = (isMain ? mainEditorRef : splitEditorRef).current;
+    if (!tab || !editor || !isFormattable(tab.lang)) return;
+    let formatted;
+    try {
+      formatted = await formatCode(tab.content, tab.lang);
+    } catch (err) {
+      alert('Format failed: ' + err.message);
+      return;
+    }
+    if (formatted === tab.content) return;
+    const model = editor.getModel();
+    editor.executeEdits('prettier', [{ range: model.getFullModelRange(), text: formatted }]);
   }, [tabs, splitTabs, activePath, splitActivePath, focusedSide]);
+
+  const relPathFor = useCallback((tabPath) => {
+    if (!tabPath || !rootDir || !tabPath.startsWith(rootDir)) return '';
+    return tabPath.slice(rootDir.length).replace(/\\/g, '/').replace(/^\//, '');
+  }, [rootDir]);
+
+  // Starts the local server if it isn't already running; both the embedded
+  // preview and "open in browser" share this single server instance.
+  const ensureLiveServer = useCallback(async () => {
+    if (liveServer) return liveServer;
+    if (!rootDir) return null;
+    const res = await window.zeus?.liveserverStart(rootDir);
+    if (res?.error) { alert('Live Server failed to start: ' + res.error); return null; }
+    setLiveServer(res);
+    return res;
+  }, [liveServer, rootDir]);
+
+  const toggleLiveServer = useCallback(async () => {
+    if (liveServer) { await window.zeus?.liveserverStop(); setLiveServer(null); setPreviewOpen(false); return; }
+    const ls = await ensureLiveServer();
+    if (!ls) return;
+    window.zeus?.openExternal(ls.url + relPathFor(activePath));
+  }, [liveServer, ensureLiveServer, relPathFor, activePath]);
+
+  const togglePreview = useCallback(async () => {
+    if (previewOpen) { setPreviewOpen(false); return; }
+    const ls = await ensureLiveServer();
+    if (!ls) return;
+    setPreviewOpen(true);
+  }, [previewOpen, ensureLiveServer]);
+
+  // ── File tree mutations: new file/folder, rename, delete ─────────────────────
+  const reconcileRename = useCallback((oldPath, newPath) => {
+    const remap = (t) => {
+      if (t.path === oldPath) return { ...t, path: newPath, name: newPath.split(/[\\/]/).pop() };
+      if (t.path.startsWith(oldPath + '\\') || t.path.startsWith(oldPath + '/')) {
+        return { ...t, path: newPath + t.path.slice(oldPath.length) };
+      }
+      return t;
+    };
+    setTabs(prev => prev.map(remap));
+    setSplitTabs(prev => prev.map(remap));
+    setActivePath(p => (p === oldPath ? newPath : p?.startsWith(oldPath + '\\') || p?.startsWith(oldPath + '/') ? newPath + p.slice(oldPath.length) : p));
+    setSplitActivePath(p => (p === oldPath ? newPath : p?.startsWith(oldPath + '\\') || p?.startsWith(oldPath + '/') ? newPath + p.slice(oldPath.length) : p));
+  }, []);
+
+  const reconcileDelete = useCallback((deletedPath) => {
+    const matches = (p) => p === deletedPath || p.startsWith(deletedPath + '\\') || p.startsWith(deletedPath + '/');
+    setTabs(prev => prev.filter(t => !matches(t.path)));
+    setSplitTabs(prev => prev.filter(t => !matches(t.path)));
+    setActivePath(p => (p && matches(p) ? null : p));
+    setSplitActivePath(p => (p && matches(p) ? null : p));
+  }, []);
+
+  const newFile = useCallback(async (targetDir) => {
+    const name = await askText({ title: 'NEW FILE', label: 'FILE NAME', defaultValue: 'untitled.txt', confirmLabel: 'CREATE' });
+    if (!name) return;
+    const res = await window.zeus?.editorCreateFile(targetDir, name);
+    if (res?.error) { alert(res.error); return; }
+    notifyDirChanged(targetDir);
+  }, [askText, notifyDirChanged]);
+
+  const newFolder = useCallback(async (targetDir) => {
+    const name = await askText({ title: 'NEW FOLDER', label: 'FOLDER NAME', defaultValue: 'new-folder', confirmLabel: 'CREATE' });
+    if (!name) return;
+    const res = await window.zeus?.editorCreateDir(targetDir, name);
+    if (res?.error) { alert(res.error); return; }
+    notifyDirChanged(targetDir);
+  }, [askText, notifyDirChanged]);
+
+  const renameEntry = useCallback(async (entry) => {
+    const name = await askText({ title: 'RENAME', label: 'NEW NAME', defaultValue: entry.name, confirmLabel: 'RENAME' });
+    if (!name || name === entry.name) return;
+    const res = await window.zeus?.editorRename(entry.path, name);
+    if (res?.error) { alert(res.error); return; }
+    reconcileRename(entry.path, res.path);
+    notifyDirChanged(dirnameOf(entry.path));
+  }, [askText, reconcileRename, notifyDirChanged]);
+
+  const deleteEntry = useCallback(async (entry) => {
+    if (!confirm(`Delete "${entry.name}"? This cannot be undone.`)) return;
+    const res = await window.zeus?.editorDelete(entry.path);
+    if (res?.error) { alert(res.error); return; }
+    reconcileDelete(entry.path);
+    notifyDirChanged(dirnameOf(entry.path));
+  }, [reconcileDelete, notifyDirChanged]);
+
+  const openContextMenu = useCallback((x, y, entry) => setContextMenu({ x, y, entry }), []);
 
   // Ctrl+S → save active file (in the focused pane). Esc → close editor.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
-      else if (e.key === 'Escape') { if (newProjectOpen) setNewProjectOpen(false); else onClose(); }
+      else if (e.shiftKey && e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); formatActive(); }
+      else if (e.key === 'Escape') { if (promptState) return; if (newProjectOpen) setNewProjectOpen(false); else onClose(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [save, onClose, newProjectOpen]);
+  }, [save, formatActive, onClose, newProjectOpen, promptState]);
 
   const activeTab = tabs.find(t => t.path === activePath) || null;
-  const previewSrc = activeTab && /\.html?$/i.test(activeTab.name)
-    ? `file:///${activeTab.path.replace(/\\/g, '/')}?t=${previewKey}`
+  const focusedTab = focusedSide === 'main' ? activeTab : splitTabs.find(t => t.path === splitActivePath) || null;
+  const previewSrc = liveServer
+    ? liveServer.url + (activeTab && /\.html?$/i.test(activeTab.name) ? relPathFor(activeTab.path) : '')
     : null;
 
   return (
@@ -418,10 +655,31 @@ export default function CodeEditor({ onClose }) {
         <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)' }} onClick={openFolder}>
           OPEN FOLDER
         </button>
-        {previewSrc && (
+        {focusedTab && (
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: focusedTab.dirty ? 'var(--c-accent)' : 'var(--c-muted)', opacity: focusedTab.dirty ? 1 : 0.5 }}
+            onClick={save} disabled={!focusedTab.dirty} title="Ctrl+S">
+            {focusedTab.dirty ? 'SAVE •' : 'SAVE'}
+          </button>
+        )}
+        <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: autoSave ? 'var(--c-green)' : 'var(--c-muted)' }}
+          onClick={() => setAutoSave(v => !v)} title="Automatically save 700ms after you stop typing">
+          AUTO SAVE: {autoSave ? 'ON' : 'OFF'}
+        </button>
+        {focusedTab && isFormattable(focusedTab.lang) && (
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)' }} onClick={formatActive} title="Shift+Alt+F">
+            FORMAT
+          </button>
+        )}
+        {rootDir && (
           <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: previewOpen ? 'var(--c-green)' : 'var(--c-muted)' }}
-            onClick={() => setPreviewOpen(v => !v)}>
+            onClick={togglePreview}>
             {previewOpen ? 'HIDE PREVIEW' : 'PREVIEW'}
+          </button>
+        )}
+        {rootDir && (
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: liveServer ? 'var(--c-green)' : 'var(--c-muted)' }}
+            onClick={toggleLiveServer} title="Serves the project at a local URL and auto-reloads your browser on every file change">
+            {liveServer ? `LIVE · :${liveServer.port}` : 'GO LIVE'}
           </button>
         )}
         <button className="btn-icon w-6 h-6" onClick={onClose} title="Close (Esc)">
@@ -455,6 +713,7 @@ export default function CodeEditor({ onClose }) {
 
         {/* Sidebar */}
         <div className="flex-shrink-0 overflow-y-auto"
+          onContextMenu={(e) => { if (sidebarView === 'explorer' && rootDir) { e.preventDefault(); openContextMenu(e.clientX, e.clientY, null); } }}
           style={{ width: 220, borderRight: '1px solid var(--c-border)', background: '#0a0e15', padding: sidebarView === 'explorer' ? '8px 4px' : 0 }}>
           {sidebarView === 'explorer' ? (
             rootEntries.length === 0 ? (
@@ -465,7 +724,9 @@ export default function CodeEditor({ onClose }) {
               </div>
             ) : (
               rootEntries.map(e => (
-                <TreeNode key={e.path} entry={e} depth={0} onOpenFile={openFile} onSplitFile={splitFile} activePath={focusedSide === 'main' ? activePath : splitActivePath} />
+                <TreeNode key={e.path} entry={e} depth={0} onOpenFile={openFile}
+                  activePath={focusedSide === 'main' ? activePath : splitActivePath}
+                  onContextMenu={openContextMenu} mutationDir={mutation.dir} mutationVersion={mutation.version} />
               ))
             )
           ) : (
@@ -477,12 +738,13 @@ export default function CodeEditor({ onClose }) {
         <div className="flex flex-1 overflow-hidden">
           <EditorPane
             tabs={tabs} activePath={activePath} setActivePath={setActivePath}
-            onChange={(v) => onChange('main', v)}
+            onChange={(p, v) => onChange('main', p, v)}
             onCloseTab={(p) => closeTab('main', p)}
             focused={focusedSide === 'main'}
             onFocus={() => setFocusedSide('main')}
             onSplit={splitFile}
             allowSplit={!splitOpen}
+            editorRef={mainEditorRef}
           />
 
           {splitOpen && (
@@ -490,7 +752,7 @@ export default function CodeEditor({ onClose }) {
               <div style={{ width: 1, background: 'var(--c-border)', flexShrink: 0 }} />
               <EditorPane
                 tabs={splitTabs} activePath={splitActivePath} setActivePath={setSplitActivePath}
-                onChange={(v) => onChange('split', v)}
+                onChange={(p, v) => onChange('split', p, v)}
                 onCloseTab={(p) => {
                   closeTab('split', p);
                   if (splitTabs.length <= 1) { setSplitOpen(false); setFocusedSide('main'); }
@@ -498,13 +760,14 @@ export default function CodeEditor({ onClose }) {
                 focused={focusedSide === 'split'}
                 onFocus={() => setFocusedSide('split')}
                 allowSplit={false}
+                editorRef={splitEditorRef}
               />
             </>
           )}
 
           {previewOpen && previewSrc && (
             <div className="flex-shrink-0" style={{ width: '40%', borderLeft: '1px solid var(--c-border)', background: '#fff' }}>
-              <iframe key={previewKey} src={previewSrc} title="preview"
+              <iframe src={previewSrc} title="preview"
                 style={{ width: '100%', height: '100%', border: 'none' }} />
             </div>
           )}
@@ -512,6 +775,20 @@ export default function CodeEditor({ onClose }) {
       </div>
 
       {newProjectOpen && <NewProjectModal onClose={() => setNewProjectOpen(false)} onCreated={onProjectCreated} />}
+
+      {promptState && <PromptModal {...promptState} />}
+
+      {contextMenu && (
+        <TreeContextMenu
+          x={contextMenu.x} y={contextMenu.y} entry={contextMenu.entry}
+          onClose={() => setContextMenu(null)}
+          onNewFile={() => newFile(contextMenu.entry ? contextMenu.entry.path : rootDir)}
+          onNewFolder={() => newFolder(contextMenu.entry ? contextMenu.entry.path : rootDir)}
+          onOpenSide={() => splitFile(contextMenu.entry)}
+          onRename={() => renameEntry(contextMenu.entry)}
+          onDelete={() => deleteEntry(contextMenu.entry)}
+        />
+      )}
     </motion.div>
   );
 }

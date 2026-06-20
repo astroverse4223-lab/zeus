@@ -7,6 +7,7 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
 const { exec, spawn, execFile } = require('child_process');
 const { promisify } = require('util');
 const _execBase = promisify(exec);
@@ -255,7 +256,7 @@ app.whenReady().then(() => {
   const tg = settings.integrations?.telegram;
   if (tg?.enabled && tg?.botToken) startTelegramBot(tg.botToken);
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { stopLiveServer(); if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
 // ─── Window IPC ──────────────────────────────────────────────────────────────
@@ -658,6 +659,49 @@ ipcMain.handle('zeus:editor-write-file', (_, { path: filePath, content }) => {
   }
 });
 
+// ── Code editor: file tree mutations (new file/folder, rename, delete) ─────────
+ipcMain.handle('zeus:editor-create-file', (_, { dirPath, name }) => {
+  try {
+    const filePath = path.join(dirPath, name);
+    if (fs.existsSync(filePath)) return { error: 'A file with that name already exists' };
+    fs.writeFileSync(filePath, '', 'utf-8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:editor-create-dir', (_, { dirPath, name }) => {
+  try {
+    const newDir = path.join(dirPath, name);
+    if (fs.existsSync(newDir)) return { error: 'A folder with that name already exists' };
+    fs.mkdirSync(newDir, { recursive: true });
+    return { ok: true, path: newDir };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:editor-rename', (_, { oldPath, newName }) => {
+  try {
+    const newPath = path.join(path.dirname(oldPath), newName);
+    if (fs.existsSync(newPath)) return { error: 'A file or folder with that name already exists' };
+    fs.renameSync(oldPath, newPath);
+    return { ok: true, path: newPath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:editor-delete', (_, targetPath) => {
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 // ── Code editor: new project scaffolding ───────────────────────────────────────
 ipcMain.handle('zeus:project-new', async (_, { parentDir, name, initGit }) => {
   try {
@@ -672,6 +716,86 @@ ipcMain.handle('zeus:project-new', async (_, { parentDir, name, initGit }) => {
   }
 });
 
+// ── Code editor: Live Server (local static server + auto-reload on save) ───────
+const LIVE_MIME = {
+  '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+  '.mjs': 'application/javascript', '.json': 'application/json', '.svg': 'image/svg+xml',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
+  '.txt': 'text/plain', '.md': 'text/markdown',
+};
+const LIVE_RELOAD_SCRIPT = `<script>(function(){try{var s=new EventSource('/__livereload');s.onmessage=function(e){if(e.data==='reload')location.reload();};}catch(e){}})();</script>`;
+
+let liveServer = null; // { server, watcher, port, dir, clients }
+
+function stopLiveServer() {
+  if (!liveServer) return;
+  try { liveServer.watcher.close(); } catch {}
+  for (const res of liveServer.clients) { try { res.end(); } catch {} }
+  try { liveServer.server.close(); } catch {}
+  liveServer = null;
+}
+
+ipcMain.handle('zeus:liveserver-start', async (_, dir) => {
+  try {
+    stopLiveServer();
+    const clients = new Set();
+    const normRoot = path.normalize(dir);
+
+    const server = http.createServer((req, res) => {
+      const urlPath = decodeURIComponent(req.url.split('?')[0]);
+      if (urlPath === '/__livereload') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+        res.write('\n');
+        clients.add(res);
+        req.on('close', () => clients.delete(res));
+        return;
+      }
+      let rel = urlPath.endsWith('/') ? urlPath + 'index.html' : urlPath;
+      const filePath = path.normalize(path.join(normRoot, rel));
+      if (!filePath.startsWith(normRoot)) { res.writeHead(403); res.end('Forbidden'); return; }
+      fs.readFile(filePath, (err, data) => {
+        if (err) { res.writeHead(404); res.end('Not found'); return; }
+        const ext = path.extname(filePath).toLowerCase();
+        const mime = LIVE_MIME[ext] || 'application/octet-stream';
+        if (ext === '.html' || ext === '.htm') {
+          const html = data.toString('utf-8');
+          const injected = html.includes('</body>') ? html.replace('</body>', LIVE_RELOAD_SCRIPT + '</body>') : html + LIVE_RELOAD_SCRIPT;
+          res.writeHead(200, { 'Content-Type': mime });
+          res.end(injected);
+        } else {
+          res.writeHead(200, { 'Content-Type': mime });
+          res.end(data);
+        }
+      });
+    });
+
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const port = server.address().port;
+
+    let debounceTimer = null;
+    const watcher = fs.watch(dir, { recursive: true }, () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        for (const res of clients) { try { res.write('data: reload\n\n'); } catch {} }
+      }, 150);
+    });
+
+    liveServer = { server, watcher, port, dir, clients };
+    return { ok: true, port, url: `http://127.0.0.1:${port}/` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:liveserver-stop', () => {
+  stopLiveServer();
+  return { ok: true };
+});
+
 // ── Code editor: git integration ────────────────────────────────────────────────
 async function runGit(args, cwd) {
   try {
@@ -683,8 +807,12 @@ async function runGit(args, cwd) {
 }
 
 ipcMain.handle('zeus:git-status', async (_, dir) => {
-  const branchRes = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir);
-  if (branchRes.code !== 0) return { ok: false, error: branchRes.stderr.includes('not a git repository') ? 'not a git repository' : branchRes.stderr };
+  const dotGit = await runGit(['rev-parse', '--is-inside-work-tree'], dir);
+  if (dotGit.code !== 0) return { ok: false, error: 'not a git repository' };
+  // `rev-parse HEAD` fails on a fresh repo with zero commits — fall back to the
+  // current branch name via symbolic-ref, which works even before the first commit.
+  let branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).stdout.trim();
+  if (!branch) branch = (await runGit(['symbolic-ref', '--short', 'HEAD'], dir)).stdout.trim() || '(no commits yet)';
   const statusRes = await runGit(['status', '--porcelain=v1'], dir);
   const staged = [], unstaged = [], untracked = [];
   for (const line of statusRes.stdout.split('\n')) {
@@ -697,7 +825,7 @@ ipcMain.handle('zeus:git-status', async (_, dir) => {
       if (y !== ' ' && y !== '?') unstaged.push(file);
     }
   }
-  return { ok: true, branch: branchRes.stdout.trim(), staged, unstaged, untracked };
+  return { ok: true, branch, staged, unstaged, untracked };
 });
 
 ipcMain.handle('zeus:git-stage', async (_, { dir, paths }) => {
