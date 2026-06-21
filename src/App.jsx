@@ -13,7 +13,11 @@ import Notepad from './components/Notepad.jsx';
 import ModelCompare from './components/ModelCompare.jsx';
 import ImageEditor from './components/ImageEditor.jsx';
 import ImageGen from './components/ImageGen.jsx';
+import VaultPanel from './components/VaultPanel.jsx';
 import BootSequence from './components/BootSequence.jsx';
+import SnakeGame from './components/SnakeGame.jsx';
+import MatrixRainBackground from './components/MatrixRainBackground.jsx';
+import IdleScreensaver from './components/IdleScreensaver.jsx';
 import useWakeWord from './hooks/useWakeWord.js';
 import { speak, stopSpeaking } from './lib/speech.js';
 import { playSfx } from './lib/sfx.js';
@@ -27,6 +31,8 @@ export default function App() {
     compareOpen, setCompareOpen,
     imageEditorOpen, setImageEditorOpen,
     imageGenOpen, setImageGenOpen,
+    vaultOpen, setVaultOpen,
+    snakeOpen, setSnakeOpen,
     sidebarOpen,
     activeId, getActive,
     newConversation,
@@ -104,9 +110,57 @@ export default function App() {
     };
   }, []);
 
+  // Custom commands (Settings → Commands) bypass the LLM entirely: an exact trigger-phrase
+  // match either echoes a canned reply or fires a real PC action via the dedicated IPC,
+  // reusing the same dangerous-tool confirmation gate as agent/chat tool calls.
+  const runCustomCommand = useCallback(async (cmd) => {
+    stopSpeaking();
+    useStore.getState().setSpeaking(false, null);
+    playSfx('send');
+
+    let convId = useStore.getState().activeId;
+    if (!convId) convId = useStore.getState().newConversation();
+
+    addMessage(convId, { id: uuid(), role: 'user', content: cmd.trigger, timestamp: new Date().toISOString() });
+
+    const aiMsgId = uuid();
+    addMessage(convId, {
+      id: aiMsgId, role: 'assistant', content: '', timestamp: new Date().toISOString(),
+      toolActivities: [], isStreaming: cmd.kind !== 'reply',
+    });
+
+    if (cmd.kind === 'reply') {
+      updateMessage(convId, aiMsgId, { content: cmd.value || '', isStreaming: false });
+      playSfx('receive');
+      return;
+    }
+
+    const toolName = cmd.kind === 'open_app' ? 'open_application' : cmd.kind;
+    updateMessage(convId, aiMsgId, {
+      toolActivities: [{ id: uuid(), tool: toolName, status: 'running', input: { value: cmd.value }, result: null }],
+    });
+    try {
+      const result = await window.zeus?.runCustomCommand(cmd.kind, cmd.value);
+      const ok = result && !result.error && !result.denied;
+      updateMessage(convId, aiMsgId, {
+        content: result?.denied ? '⚠ Action denied.' : result?.error ? `⚠ ${result.error}` : `✅ Ran "${cmd.trigger}"`,
+        isStreaming: false,
+        toolActivities: [{ id: uuid(), tool: toolName, status: 'done', input: { value: cmd.value }, result }],
+      });
+      playSfx(ok ? 'receive' : 'error');
+    } catch (err) {
+      updateMessage(convId, aiMsgId, { content: `⚠ ${err.message}`, isStreaming: false });
+      playSfx('error');
+    }
+  }, [addMessage, updateMessage]);
+
   // Send a message to the AI
   const handleSend = useCallback(async (text, imageBase64 = null, agentMode = false, agentDir = '') => {
     if (!text.trim() || streaming) return;
+
+    const customCmd = (useStore.getState().settings?.customCommands || [])
+      .find(c => c.trigger?.trim() && c.trigger.trim().toLowerCase() === text.trim().toLowerCase());
+    if (customCmd) { await runCustomCommand(customCmd); return; }
 
     // Stop any in-progress speech the moment the user sends something new
     stopSpeaking();
@@ -124,7 +178,7 @@ export default function App() {
 
     // Ollama is local — no API key needed
     if (!apiKey && provider !== 'ollama') {
-      alert(`⚡ ZEUS: No API key set for ${provider}. Open Settings to add one.`);
+      alert(`⚡ ${s?.assistantName || 'ZEUS'}: No API key set for ${provider}. Open Settings to add one.`);
       useStore.getState().setSettingsOpen(true);
       return;
     }
@@ -193,7 +247,7 @@ export default function App() {
 
     if (!window.zeus) {
       updateMessage(convId, aiMsgId, {
-        content: '⚠ Zeus is not running inside Electron. Launch with `npm run dev`.',
+        content: `⚠ ${s?.assistantName || 'Zeus'} is not running inside Electron. Launch with \`npm run dev\`.`,
         isStreaming: false,
       });
       setStreaming(false, null);
@@ -329,14 +383,15 @@ export default function App() {
       });
       setStreaming(false, null);
     }
-  }, [streaming, addMessage, updateMessage, setStreaming]);
+  }, [streaming, addMessage, updateMessage, setStreaming, runCustomCommand]);
 
   // Keep handleSendRef current so wake word + mini-HUD can call it
   useEffect(() => { handleSendRef.current = handleSend; }, [handleSend]);
 
-  // Wake word — "Hey Zeus" activates voice or focuses window
+  // Wake word — "Hey {assistantName}" activates voice or focuses window
   useWakeWord({
     enabled: wakeWordEnabled,
+    name: settings?.assistantName || 'zeus',
     onWake: () => {
       document.querySelector('textarea')?.focus();
       if (!streaming) window.focus?.();
@@ -393,30 +448,38 @@ export default function App() {
 
   return (
     <div className="flex flex-col w-full h-full zeus-bg overflow-hidden">
+      <MatrixRainBackground />
+
       <AnimatePresence>
         {booting && <BootSequence key="boot" onDone={() => setBooting(false)} />}
       </AnimatePresence>
 
-      <HUD />
+      {/* Positioned (relative + z-index) so this content reliably paints above the fixed
+          background canvas — a `position: fixed` element always stacks above static, in-flow
+          content per the CSS spec, regardless of DOM order or z-index, unless the static
+          content is given its own stacking context like this. */}
+      <div className="flex flex-col flex-1 overflow-hidden" style={{ position: 'relative', zIndex: 1 }}>
+        <HUD />
 
-      <div className="flex flex-1 overflow-hidden">
-        <AnimatePresence initial={false}>
-          {sidebarOpen && (
-            <motion.div
-              key="sidebar"
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 260, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.2, ease: 'easeInOut' }}
-              className="overflow-hidden flex-shrink-0"
-            >
-              <Sidebar />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <div className="flex flex-1 overflow-hidden">
+          <AnimatePresence initial={false}>
+            {sidebarOpen && (
+              <motion.div
+                key="sidebar"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: 260, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
+                className="overflow-hidden flex-shrink-0"
+              >
+                <Sidebar />
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        <div className="flex-1 flex flex-col overflow-hidden relative">
-          <ChatWindow onSend={handleSend} onStop={handleStop} onOpenAgent={() => setAgentLauncherOpen(true)} />
+          <div className="flex-1 flex flex-col overflow-hidden relative">
+            <ChatWindow onSend={handleSend} onStop={handleStop} onOpenAgent={() => setAgentLauncherOpen(true)} />
+          </div>
         </div>
       </div>
 
@@ -462,6 +525,18 @@ export default function App() {
       <AnimatePresence>
         {imageGenOpen && <ImageGen key="image-gen" onClose={() => setImageGenOpen(false)} />}
       </AnimatePresence>
+
+      {/* Password vault — full-screen overlay */}
+      <AnimatePresence>
+        {vaultOpen && <VaultPanel key="vault" onClose={() => setVaultOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Hidden logo-click easter egg */}
+      <AnimatePresence>
+        {snakeOpen && <SnakeGame key="snake" onClose={() => setSnakeOpen(false)} />}
+      </AnimatePresence>
+
+      <IdleScreensaver />
 
       <AnimatePresence>
         {settingsOpen && (

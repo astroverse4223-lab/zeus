@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('zeus', {
   sendMessage: (params) => ipcRenderer.invoke('zeus:ai-message', params),
   cancelStream: (id)    => ipcRenderer.send('zeus:cancel-stream', id),
   generateTitle: (params) => ipcRenderer.invoke('zeus:generate-title', params),
+  runCustomCommand: (kind, value) => ipcRenderer.invoke('zeus:run-custom-command', { kind, value }),
 
   // Stream chunk listener — returns an unsubscribe fn
   onChunk: (cb) => {
@@ -139,4 +140,18 @@ contextBridge.exposeInMainWorld('zeus', {
     ipcRenderer.on('zeus:update-progress', handler);
     return () => ipcRenderer.removeListener('zeus:update-progress', handler);
   },
+
+  // Password vault
+  vaultExists:      ()        => ipcRenderer.invoke('zeus:vault-exists'),
+  vaultIsUnlocked:  ()        => ipcRenderer.invoke('zeus:vault-is-unlocked'),
+  vaultSetup:       (pw)      => ipcRenderer.invoke('zeus:vault-setup', pw),
+  vaultUnlock:      (pw)      => ipcRenderer.invoke('zeus:vault-unlock', pw),
+  vaultLock:        ()        => ipcRenderer.invoke('zeus:vault-lock'),
+  vaultList:        ()        => ipcRenderer.invoke('zeus:vault-list'),
+  vaultAdd:         (entry)   => ipcRenderer.invoke('zeus:vault-add', entry),
+  vaultUpdate:      (id, patch) => ipcRenderer.invoke('zeus:vault-update', { id, patch }),
+  vaultRemove:      (id)      => ipcRenderer.invoke('zeus:vault-remove', id),
+  vaultReset:       ()        => ipcRenderer.invoke('zeus:vault-reset'),
+  vaultGeneratePassword: (opts) => ipcRenderer.invoke('zeus:vault-generate-password', opts),
+  vaultPasswordStrength: (pw)   => ipcRenderer.invoke('zeus:vault-password-strength', pw),
 });

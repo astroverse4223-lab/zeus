@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import useStore from '../store/useStore.js';
 import { stopSpeaking } from '../lib/speech.js';
+import { playSfx } from '../lib/sfx.js';
 
 const BoltIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="bolt-icon">
@@ -38,8 +39,26 @@ export const FAST_MODEL_LABELS = {
   ollama:    'Llama 3.2 3B',
 };
 
+// Clicks on the logo within this window count toward the easter egg; a pause resets the streak.
+const LOGO_CLICK_WINDOW_MS = 1500;
+const LOGO_CLICKS_TO_UNLOCK = 7;
+
 export default function HUD() {
-  const { settings, setSettings, settingsOpen, setSettingsOpen, sidebarOpen, setSidebarOpen, streaming, fastMode, setFastMode, wakeWordEnabled, setWakeWordEnabled, speaking, setSpeaking } = useStore();
+  const { settings, setSettings, settingsOpen, setSettingsOpen, sidebarOpen, setSidebarOpen, streaming, fastMode, setFastMode, wakeWordEnabled, setWakeWordEnabled, speaking, setSpeaking, setSnakeOpen } = useStore();
+  const logoClicksRef = useRef([]);
+  const assistantName = settings?.assistantName || 'Zeus';
+
+  // Hidden easter egg — click the ZEUS logo 7 times quickly to launch a theme-aware
+  // game of Snake. Pure fun, no functional purpose.
+  const handleLogoClick = () => {
+    const now = Date.now();
+    logoClicksRef.current = [...logoClicksRef.current.filter(t => now - t < LOGO_CLICK_WINDOW_MS), now];
+    if (logoClicksRef.current.length >= LOGO_CLICKS_TO_UNLOCK) {
+      logoClicksRef.current = [];
+      setSnakeOpen(true);
+      playSfx('tool');
+    }
+  };
 
   const autoSpeak = !!settings?.voice?.autoSpeak;
   const handleVoiceClick = () => {
@@ -95,11 +114,11 @@ export default function HUD() {
         </svg>
       </button>
 
-      {/* Logo */}
-      <div className="flex items-center gap-2 titlebar-nodrag select-none">
+      {/* Logo — click it a bunch of times fast for a surprise */}
+      <div className="flex items-center gap-2 titlebar-nodrag select-none cursor-pointer" onClick={handleLogoClick}>
         <BoltIcon />
         <span className="font-orbitron font-bold text-base tracking-widest glow-text" style={{ color: 'var(--c-accent)' }}>
-          ZEUS
+          {(settings?.assistantName || 'ZEUS').toUpperCase()}
         </span>
       </div>
 
@@ -112,7 +131,7 @@ export default function HUD() {
       <button
         className="titlebar-nodrag flex items-center gap-1 rounded-lg px-2 py-1 transition-all"
         onClick={() => setWakeWordEnabled(!wakeWordEnabled)}
-        title={wakeWordEnabled ? 'Hey Zeus listening — click to disable' : 'Enable "Hey Zeus" wake word'}
+        title={wakeWordEnabled ? `Hey ${assistantName} listening — click to disable` : `Enable "Hey ${assistantName}" wake word`}
         style={{
           border: `1px solid ${wakeWordEnabled ? 'rgba(0,255,136,0.4)' : 'var(--c-border)'}`,
           background: wakeWordEnabled ? 'rgba(0,255,136,0.08)' : 'transparent',
@@ -135,9 +154,9 @@ export default function HUD() {
       <button
         className="titlebar-nodrag flex items-center gap-1 rounded-lg px-2 py-1 transition-all"
         onClick={handleVoiceClick}
-        title={speaking ? 'Zeus is speaking — click to stop'
-          : autoSpeak ? 'Voice ON — Zeus reads replies aloud · click to mute'
-          : 'Voice OFF — click to have Zeus read replies aloud'}
+        title={speaking ? `${assistantName} is speaking — click to stop`
+          : autoSpeak ? `Voice ON — ${assistantName} reads replies aloud · click to mute`
+          : `Voice OFF — click to have ${assistantName} read replies aloud`}
         style={{
           border: `1px solid ${speaking ? 'rgba(16,222,150,0.55)' : autoSpeak ? 'rgba(16,222,150,0.4)' : 'var(--c-border)'}`,
           background: speaking ? 'rgba(16,222,150,0.12)' : autoSpeak ? 'rgba(16,222,150,0.06)' : 'transparent',

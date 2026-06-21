@@ -31,17 +31,28 @@ export default function ModelCompare({ onClose }) {
   const [prompt, setPrompt] = useState('');
   const [panes, setPanes] = useState(() => [newPane('anthropic'), newPane('openai')]);
   const [running, setRunning] = useState(false);
+  const [ollamaInstalled, setOllamaInstalled] = useState([]);
 
   const panesRef = useRef(panes);
   panesRef.current = panes;
   const unsubRef = useRef(null);
   const startRef = useRef({});
 
+  // Load the real list of locally-installed Ollama models, same as the main InputBar picker.
+  useEffect(() => {
+    if (!window.zeus?.ollamaModels) return;
+    let alive = true;
+    window.zeus.ollamaModels()
+      .then(res => { if (alive) setOllamaInstalled((res?.models || []).map(m => m.name).filter(Boolean)); })
+      .catch(() => { if (alive) setOllamaInstalled([]); });
+    return () => { alive = false; };
+  }, []);
+
   const patchPane = (id, patch) =>
     setPanes(prev => prev.map(p => p.id === id ? { ...p, ...(typeof patch === 'function' ? patch(p) : patch) } : p));
 
   const setProvider = (id, provider) =>
-    patchPane(id, { provider, model: MODELS[provider]?.[0]?.id || '' });
+    patchPane(id, { provider, model: provider === 'ollama' ? (ollamaInstalled[0] || MODELS.ollama[0]?.id || '') : (MODELS[provider]?.[0]?.id || '') });
 
   const addPane = () => { if (panes.length < 4) setPanes(prev => [...prev, newPane('gemini')]); };
   const removePane = (id) => setPanes(prev => prev.length > 1 ? prev.filter(p => p.id !== id) : prev);
@@ -166,7 +177,7 @@ export default function ModelCompare({ onClose }) {
               >
                 {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
-              {pane.provider === 'ollama' ? (
+              {pane.provider === 'ollama' && ollamaInstalled.length === 0 ? (
                 <input
                   value={pane.model}
                   onChange={(e) => patchPane(pane.id, { model: e.target.value })}
@@ -182,7 +193,14 @@ export default function ModelCompare({ onClose }) {
                   className="outline-none cursor-pointer rounded flex-1 min-w-0"
                   style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', color: 'var(--c-dim)', fontSize: 11, padding: '2px 4px' }}
                 >
-                  {(MODELS[pane.provider] || []).map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                  {pane.provider === 'ollama' ? (
+                    <>
+                      {pane.model && !ollamaInstalled.includes(pane.model) && <option value={pane.model}>{pane.model} (not installed)</option>}
+                      {ollamaInstalled.map(name => <option key={name} value={name}>{name}</option>)}
+                    </>
+                  ) : (
+                    (MODELS[pane.provider] || []).map(m => <option key={m.id} value={m.id}>{m.label}</option>)
+                  )}
                 </select>
               )}
               <datalist id={`ollama-${pane.id}`}>

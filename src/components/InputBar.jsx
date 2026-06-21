@@ -50,7 +50,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   const {
     settings, setSettings, streaming, fastMode, agentMode, setAgentMode, agentDir,
     draft: text, setDraft: setText, pendingImage, setPendingImage,
-    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen, setImageGenOpen,
+    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen, setImageGenOpen, setVaultOpen,
   } = useStore();
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
@@ -60,6 +60,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
 
+  const assistantName = settings?.assistantName || 'Zeus';
   const provider      = settings?.activeProvider || 'anthropic';
   const configModel   = settings?.providers?.[provider]?.model || '';
   const effectiveModel = fastMode ? (FAST_MODELS[provider] || configModel) : configModel;
@@ -74,8 +75,10 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
     ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
   }, [text]);
 
-  // Focus on mount
-  useEffect(() => { textareaRef.current?.focus(); }, []);
+  // Focus on mount, and again whenever streaming ends — the textarea is `disabled`
+  // while Zeus is responding (browsers drop focus from disabled elements), so without
+  // this the user has to click back into the box after every message.
+  useEffect(() => { if (!streaming) textareaRef.current?.focus(); }, [streaming]);
 
   // Load the list of locally-installed Ollama models so the picker shows what the user
   // actually has (instead of a hardcoded guess). Refreshes whenever Ollama is selected.
@@ -380,9 +383,9 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
             lineHeight: '1.6', fontSize: '14px',
           }}
           placeholder={
-            streaming ? 'Zeus is thinking…'
+            streaming ? `${assistantName} is thinking…`
             : agentMode ? `Agent mode — describe a coding task in ${shortDir(agentDir) || 'your project'}…`
-            : 'Ask Zeus anything, or command your PC…'
+            : `Ask ${assistantName} anything, or command your PC…`
           }
           value={text}
           onChange={e => setText(e.target.value)}
@@ -435,6 +438,8 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
                     icon: <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></> },
                   { label: 'Generate image', stroke: 'var(--c-accent)', onClick: () => setImageGenOpen(true),
                     icon: <><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></> },
+                  { label: 'Password vault', stroke: 'var(--c-accent)', onClick: () => setVaultOpen(true),
+                    icon: <><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></> },
                   { label: 'Screenshot', stroke: 'var(--c-accent)', onClick: captureScreen,
                     icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
                   ...(onToggleTerminal ? [{
@@ -554,7 +559,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
       {/* Bottom hint */}
       <div className="flex items-center justify-center mt-2 gap-3">
         <span style={{ color: 'var(--c-muted)', fontSize: '10px' }}>
-          ZEUS has access to your PC · Use responsibly
+          {assistantName.toUpperCase()} has access to your PC · Use responsibly
         </span>
       </div>
     </div>

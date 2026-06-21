@@ -144,6 +144,13 @@ const useStore = create(
       imageGenOpen: false,
       setImageGenOpen(v) { set({ imageGenOpen: v }); },
 
+      vaultOpen: false,
+      setVaultOpen(v) { set({ vaultOpen: v }); },
+
+      // ── Hidden Snake easter egg ───────────────────────────────────────────────
+      snakeOpen: false,
+      setSnakeOpen(v) { set({ snakeOpen: v }); },
+
       // ── Notepad ────────────────────────────────────────────────────────────────
       notepadOpen: false,
       setNotepadOpen(v) { set({ notepadOpen: v }); },

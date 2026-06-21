@@ -61,7 +61,7 @@ export default function Sidebar() {
   const {
     conversations, activeId,
     newConversation, selectConversation, deleteConversation,
-    streaming, soundEnabled, setSoundEnabled,
+    streaming, soundEnabled, setSoundEnabled, settings,
   } = useStore();
 
   const [search, setSearch] = useState('');
@@ -136,7 +136,7 @@ export default function Sidebar() {
         <div className="flex items-center gap-2">
           <div className="status-dot online" />
           <span style={{ color: 'var(--c-muted)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.1em' }}>
-            ZEUS ONLINE
+            {(settings?.assistantName || 'ZEUS').toUpperCase()} ONLINE
           </span>
           <button
             className="btn-icon ml-auto w-6 h-6 rounded-md flex items-center justify-center"

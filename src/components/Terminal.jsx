@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
+import useStore from '../store/useStore.js';
 
 // Strip ANSI escape codes
 const stripAnsi = str => str.replace(/\x1B\[[0-9;]*[mGKHFJABCDsuhl]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
@@ -88,6 +89,7 @@ function OutputLine({ line }) {
 }
 
 export default function Terminal({ onClose }) {
+  const assistantName = useStore(s => s.settings?.assistantName || 'Zeus');
   const [lines, setLines]   = useState([]);
   const [input, setInput]   = useState('');
   const [cwd, setCwd]       = useState('');
@@ -256,7 +258,7 @@ export default function Terminal({ onClose }) {
       >
         {lines.length === 0 && (
           <div style={{ color: 'var(--c-muted)', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', padding: '8px 0' }}>
-            Zeus terminal — type a command and press Enter. Ctrl+L to clear.
+            {assistantName} terminal — type a command and press Enter. Ctrl+L to clear.
           </div>
         )}
         {lines.map((line, i) => <OutputLine key={i} line={line} />)}

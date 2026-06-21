@@ -275,7 +275,7 @@ function MessageBubble({ message }) {
             </span>
           ) : (
             <span style={{ color: 'var(--c-accent)', fontSize: '10px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.05em' }}>
-              ZEUS
+              {(settings?.assistantName || 'ZEUS').toUpperCase()}
             </span>
           )}
           {message.provider && !isUser && (

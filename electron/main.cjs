@@ -42,13 +42,44 @@ function getKnowledge() {
 // ─── Auto-update ──────────────────────────────────────────────────────────────
 const updater = require('./update/index.cjs');
 
+// ─── Password Vault ──────────────────────────────────────────────────────────
+const { createVault, generatePassword, passwordStrength } = require('./vault/index.cjs');
+let _vault = null;
+function getVault() {
+  if (!_vault) _vault = createVault({ filePath: path.join(app.getPath('userData'), 'zeus-vault.json') });
+  return _vault;
+}
+
 // ─── Plugins (skill packs) ──────────────────────────────────────────────────────
 const plugins = require('./plugins/index.cjs');
 function getPluginsDir() { return path.join(app.getPath('userData'), 'plugins'); }
+// Cloud APIs reprocess a big injected skill-pack cheaply (and now benefit from Anthropic
+// prompt caching — see runAnthropic), but local Ollama models have to prefill the entire
+// thing on consumer GPU/CPU every turn with no equivalent caching available through the
+// OpenAI-compatible endpoint we use. A 120KB skill pack is a non-issue for Claude and a
+// multi-minute stall for a local 7-8B model. Cap it hard for Ollama specifically.
+const OLLAMA_MAX_PLUGIN_BYTES = 12 * 1024; // ~3k tokens — enough for focused skill guidance, not a novel
 // Concatenated skill text for the plugins enabled for a given mode ('agent'|'chat').
+// getZeusSystem() calls this on every single turn of the agent loop (potentially
+// hundreds per task), and a large skill-pack plugin can mean dozens of file reads —
+// cache by (mode, enabled-list, provider) so a long agent run only re-reads disk when
+// the enabled set or active provider actually changes, not on every tool-call round-trip.
+let _pluginSkillsCache = { key: null, value: '' };
 function pluginSkillsFor(mode) {
-  try { return plugins.loadEnabledSkills(getPluginsDir(), settings?.plugins?.enabled || [], mode); }
-  catch { return ''; }
+  const enabledList = settings?.plugins?.enabled || [];
+  const isOllama = settings?.activeProvider === 'ollama';
+  const key = mode + '|' + enabledList.join(',') + '|' + (isOllama ? 'ollama' : 'cloud');
+  if (_pluginSkillsCache.key === key) return _pluginSkillsCache.value;
+  let value = '';
+  try {
+    value = plugins.loadEnabledSkills(
+      getPluginsDir(), enabledList, mode,
+      isOllama ? OLLAMA_MAX_PLUGIN_BYTES : undefined
+    );
+  }
+  catch { value = ''; }
+  _pluginSkillsCache = { key, value };
+  return value;
 }
 // Block appended to a system prompt with the enabled plugins' skill text (or '').
 function pluginSection(mode) {
@@ -67,6 +98,8 @@ const DEFAULT_SETTINGS = {
   voice: { enabled: false, autoSpeak: false, rate: 1.0, pitch: 1.0 },
   requireToolConfirmation: false,
   userName: 'Sir',
+  assistantName: 'ZEUS',
+  customCommands: [], // user-defined trigger phrases: canned replies or PC actions, bypass the LLM entirely
   theme: 'zeus',
   memory: { enabled: true },
   plugins: { enabled: [] }, // slugs of installed skill-pack plugins that are turned on
@@ -256,7 +289,7 @@ app.whenReady().then(() => {
   const tg = settings.integrations?.telegram;
   if (tg?.enabled && tg?.botToken) startTelegramBot(tg.botToken);
 });
-app.on('window-all-closed', () => { stopLiveServer(); if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { stopLiveServer(); _vault?.lock(); if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
 // ─── Window IPC ──────────────────────────────────────────────────────────────
@@ -410,7 +443,7 @@ ipcMain.handle('zeus:plugin-install', async (_, url) => {
     enabled.add(meta.slug);
     settings.plugins = { ...(settings.plugins || {}), enabled: [...enabled] };
     saveSettings(settings);
-    return { ok: true, plugin: meta };
+    return { ok: true, plugin: meta, enabled: [...enabled] };
   } catch (err) {
     return { error: err.message || 'Install failed.' };
   }
@@ -422,7 +455,7 @@ ipcMain.handle('zeus:plugin-remove', (_, slug) => {
     const enabled = (settings?.plugins?.enabled || []).filter(s => s !== plugins.slugify(slug));
     settings.plugins = { ...(settings.plugins || {}), enabled };
     saveSettings(settings);
-    return { ok: true };
+    return { ok: true, enabled };
   } catch (err) {
     return { error: err.message || 'Remove failed.' };
   }
@@ -450,6 +483,28 @@ ipcMain.handle('zeus:memory-save', (_, m) => {
   saveMemoryFile(memory);
   return memory;
 });
+
+// ─── Password Vault IPC ────────────────────────────────────────────────────────
+// Every handler that touches entries wraps its vault call so a thrown Error (wrong
+// password, vault locked, entry not found, etc.) comes back as { error } instead of
+// rejecting the IPC promise — keeps the renderer's error handling uniform.
+function vaultTry(fn) {
+  try { return { ok: true, data: fn() }; }
+  catch (err) { return { ok: false, error: err.message }; }
+}
+
+ipcMain.handle('zeus:vault-exists', () => getVault().exists());
+ipcMain.handle('zeus:vault-is-unlocked', () => getVault().isUnlocked());
+ipcMain.handle('zeus:vault-setup', (_, password) => vaultTry(() => getVault().setup(password)));
+ipcMain.handle('zeus:vault-unlock', (_, password) => vaultTry(() => getVault().unlock(password)));
+ipcMain.handle('zeus:vault-lock', () => { getVault().lock(); return true; });
+ipcMain.handle('zeus:vault-list', () => vaultTry(() => getVault().list()));
+ipcMain.handle('zeus:vault-add', (_, entry) => vaultTry(() => getVault().add(entry)));
+ipcMain.handle('zeus:vault-update', (_, { id, patch }) => vaultTry(() => getVault().update(id, patch)));
+ipcMain.handle('zeus:vault-remove', (_, id) => vaultTry(() => getVault().remove(id)));
+ipcMain.handle('zeus:vault-reset', () => { getVault().reset(); return true; });
+ipcMain.handle('zeus:vault-generate-password', (_, opts) => vaultTry(() => generatePassword(opts)));
+ipcMain.handle('zeus:vault-password-strength', (_, pw) => passwordStrength(pw));
 
 // ─── Ollama Model Manager ─────────────────────────────────────────────────────
 
@@ -1646,7 +1701,11 @@ async function executeTool(name, input, requireConfirm) {
   }
   const toolDef = TOOL_MAP[name];
 
-  if (toolDef?.dangerous && settings.requireToolConfirmation) {
+  // Dangerous tools (write_file, run_command, delete_path, kill_process, system_power)
+  // always confirm in plain chat — the user never opted into autonomous tool use there.
+  // Agent Mode is an explicit opt-in to unattended execution, so it only confirms when
+  // the user has also turned on the global Tool Confirmation setting.
+  if (toolDef?.dangerous && (!currentAgentMode || settings.requireToolConfirmation)) {
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'question',
       title: '⚡ ZEUS — Confirmation Required',
@@ -2311,6 +2370,34 @@ async function executeTool(name, input, requireConfirm) {
   return _r;
 }
 
+// ─── Custom Commands ──────────────────────────────────────────────────────────
+
+// User-defined trigger phrases (Settings → Commands) map to one of a small set of
+// real tools — they bypass the LLM entirely, so the mapping has to stay this literal
+// rather than freeform natural language.
+const CUSTOM_COMMAND_TOOL = {
+  run_command: 'run_command',
+  open_app:    'open_application',
+  open_url:    'open_url',
+};
+
+ipcMain.handle('zeus:run-custom-command', async (_, { kind, value }) => {
+  const tool = CUSTOM_COMMAND_TOOL[kind];
+  if (!tool) return { error: `Unknown command kind: ${kind}` };
+  const input = kind === 'run_command' ? { command: value }
+    : kind === 'open_app' ? { name: value }
+    : { url: value };
+  // A custom command is never an agent-mode action, no matter what's running concurrently —
+  // force the dangerous-tool confirmation gate on regardless of currentAgentMode's live value.
+  const prevAgentMode = currentAgentMode;
+  currentAgentMode = false;
+  try {
+    return await executeTool(tool, input);
+  } finally {
+    currentAgentMode = prevAgentMode;
+  }
+});
+
 // ─── Tool Result Safety ───────────────────────────────────────────────────────
 
 // Serialize a tool result to a string, capping at maxLen characters.
@@ -2372,7 +2459,8 @@ function getZeusSystem() {
   const extra = settings?.chat?.systemPromptExtra?.trim()
     ? `\n\nAdditional instructions from the user:\n${settings.chat.systemPromptExtra.trim()}`
     : '';
-  return `You are ZEUS, an advanced AI desktop assistant inspired by JARVIS. You combine intelligence, personality, and full PC control.
+  const name = settings?.assistantName?.trim() || 'ZEUS';
+  return `You are ${name}, an advanced AI desktop assistant inspired by JARVIS. You combine intelligence, personality, and full PC control.
 
 Personality: Efficient, confident, slightly formal, occasionally witty. Address the user as "${settings.userName}" unless told otherwise. Be direct and concise — no filler. When using tools, briefly narrate what you're doing.
 
@@ -2398,6 +2486,9 @@ Important: Always explain what you're about to do. For destructive actions, conf
 }
 
 function getAgentSystem(workingDir) {
+  const extra = settings?.chat?.systemPromptExtra?.trim()
+    ? `\n\nAdditional instructions from the user:\n${settings.chat.systemPromptExtra.trim()}`
+    : '';
   return `You are a coding agent. Your job is to read the project structure if needed, write all required files completely, run install/build commands, and call task_complete.
 
 Working directory: ${workingDir || 'see task message'}
@@ -2416,7 +2507,7 @@ ABSOLUTE RULES:
 
 Valid patterns:
   New project:     write_file → write_file → run_command → task_complete
-  Existing/fix:    get_directory_tree → read_file → patch_file/write_file → run_command → task_complete${pluginSection('agent')}`;
+  Existing/fix:    get_directory_tree → read_file → patch_file/write_file → run_command → task_complete${extra}${pluginSection('agent')}`;
 }
 
 function toAnthropicTools(tools) {
@@ -2615,6 +2706,21 @@ ipcMain.handle('zeus:ai-message', async (event, params) => {
 const LLM_TIMEOUT_MS = 600000; // 10 min — covers slow big-model streams
 const LLM_MAX_RETRIES = 2;
 
+// SDK-level maxRetries only covers the initial connection — once an SSE stream is
+// established, a dropped connection or mid-stream 5xx/overloaded error throws straight
+// out of the `for await` loop with no retry, killing a long agent run that may already
+// be 100+ tool calls deep. These helpers let each provider loop retry just the current
+// turn (no tool has executed yet when a stream throws, so retrying is side-effect-free)
+// instead of aborting the whole task.
+const TURN_MAX_RETRIES = 3;
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function isRetryableLLMError(err) {
+  const status = err?.status || err?.response?.status;
+  if (status && [408, 409, 429, 500, 502, 503, 504, 529].includes(status)) return true;
+  const msg = (err?.message || '').toLowerCase();
+  return /econnreset|etimedout|enotfound|eai_again|econnrefused|socket hang up|network|timeout|overloaded|fetch failed|terminated|aborted/.test(msg);
+}
+
 const AGENT_CONTINUE_MSG = '[AGENT CONTINUE] The task is not finished. Call get_directory_tree on the working directory to see what exists, then call write_file for each remaining file with its COMPLETE content. Do not output code as text. Do not ask questions. Keep building.';
 
 // Rebuild prior tool calls (carried on assistant messages as `toolActivities`)
@@ -2654,6 +2760,7 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey, im
   let msgs = expandHistoryForAnthropic(messages);
   let toolCallCount = 0;
   let agentContinues = 0;
+  let turnRetries = 0;
   const AGENT_MAX_ITERS = 300; // large React/full-stack projects need 100+ tool calls
 
   // Inject screenshot into last user message if provided
@@ -2671,60 +2778,79 @@ async function runAnthropic(sender, streamId, state, messages, model, apiKey, im
   }
 
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS) {
+    // The system prompt (and, with plugins enabled, potentially 100KB+ of injected skill
+    // text) is identical on every iteration of this loop — only `messages` grows turn to
+    // turn. Without a cache breakpoint, Anthropic re-processes that entire block as fresh
+    // input tokens on every single tool-call round-trip, which is exactly what made agent
+    // mode crawl with a large skill-pack plugin enabled. Marking it `ephemeral` lets
+    // Anthropic reuse the cached prefix (tools + system) for repeat turns within ~5 min.
     const reqOpts = {
       model: model || 'claude-opus-4-8',
       max_tokens: currentAgentMode ? 32768 : (settings?.chat?.maxTokens || 4096),
       temperature: settings?.chat?.temperature ?? 0.7,
-      system: getZeusSystem(),
+      system: [{ type: 'text', text: getZeusSystem(), cache_control: { type: 'ephemeral' } }],
       messages: msgs,
       tools: toAnthropicTools(currentAgentMode ? AGENT_TOOLS : TOOLS),
     };
     if (currentAgentMode) reqOpts.tool_choice = { type: 'any' };
 
-    const stream = client.messages.stream(reqOpts);
+    let finalMsg;
+    try {
+      const stream = client.messages.stream(reqOpts);
 
-    let currentBlock = null;
-    let inputBuf = '';
+      let currentBlock = null;
+      let inputBuf = '';
 
-    for await (const ev of stream) {
+      for await (const ev of stream) {
+        if (state.cancelled) break;
+
+        if (ev.type === 'content_block_start') {
+          if (ev.content_block.type === 'text') {
+            currentBlock = { type: 'text', text: '' };
+          } else if (ev.content_block.type === 'tool_use') {
+            currentBlock = { type: 'tool_use', id: ev.content_block.id, name: ev.content_block.name, input: {} };
+            inputBuf = '';
+            if (ev.content_block.name !== 'task_complete') {
+              sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: ev.content_block.name });
+            }
+          }
+        }
+
+        if (ev.type === 'content_block_delta') {
+          if (ev.delta.type === 'text_delta' && currentBlock?.type === 'text') {
+            currentBlock.text += ev.delta.text;
+            sender.send('zeus:chunk', { streamId, type: 'text', text: ev.delta.text });
+          }
+          if (ev.delta.type === 'input_json_delta') inputBuf += ev.delta.partial_json;
+        }
+
+        if (ev.type === 'content_block_stop') {
+          if (currentBlock?.type === 'tool_use') {
+            try {
+              currentBlock.input = JSON.parse(inputBuf);
+            } catch {
+              currentBlock.input = { __parse_error: true };
+            }
+          }
+          currentBlock = null;
+          inputBuf = '';
+        }
+      }
+
       if (state.cancelled) break;
 
-      if (ev.type === 'content_block_start') {
-        if (ev.content_block.type === 'text') {
-          currentBlock = { type: 'text', text: '' };
-        } else if (ev.content_block.type === 'tool_use') {
-          currentBlock = { type: 'tool_use', id: ev.content_block.id, name: ev.content_block.name, input: {} };
-          inputBuf = '';
-          if (ev.content_block.name !== 'task_complete') {
-            sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: ev.content_block.name });
-          }
-        }
+      finalMsg = await stream.finalMessage();
+    } catch (err) {
+      if (state.cancelled) break;
+      if (isRetryableLLMError(err) && turnRetries < TURN_MAX_RETRIES) {
+        turnRetries++;
+        sender.send('zeus:chunk', { streamId, type: 'text', text: `\n\n*(connection hiccup, retrying ${turnRetries}/${TURN_MAX_RETRIES}…)*\n\n` });
+        await sleep(1000 * 2 ** turnRetries);
+        continue;
       }
-
-      if (ev.type === 'content_block_delta') {
-        if (ev.delta.type === 'text_delta' && currentBlock?.type === 'text') {
-          currentBlock.text += ev.delta.text;
-          sender.send('zeus:chunk', { streamId, type: 'text', text: ev.delta.text });
-        }
-        if (ev.delta.type === 'input_json_delta') inputBuf += ev.delta.partial_json;
-      }
-
-      if (ev.type === 'content_block_stop') {
-        if (currentBlock?.type === 'tool_use') {
-          try {
-            currentBlock.input = JSON.parse(inputBuf);
-          } catch {
-            currentBlock.input = { __parse_error: true };
-          }
-        }
-        currentBlock = null;
-        inputBuf = '';
-      }
+      throw err;
     }
-
-    if (state.cancelled) break;
-
-    const finalMsg = await stream.finalMessage();
+    turnRetries = 0;
 
     if (finalMsg.stop_reason === 'max_tokens') {
       const assistantContent = finalMsg.content.length
@@ -2863,6 +2989,7 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
   // instead of `max_tokens`. Sending the chat-model params returns a 400 and breaks the call.
   const isReasoningModel = /^o\d/i.test(model || '');
   const tokenBudget = currentAgentMode ? 16384 : (settings?.chat?.maxTokens || 4096);
+  let turnRetries = 0;
 
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OAI) {
     const streamParams = {
@@ -2876,36 +3003,48 @@ async function runOpenAI(sender, streamId, state, messages, model, apiKey, image
     };
     if (currentAgentMode) streamParams.tool_choice = 'required';
 
-    const stream = await client.chat.completions.create(streamParams);
-
     const tcAcc = {};
     let fullContent = '';
     let stopReason = null;
 
-    for await (const chunk of stream) {
-      if (state.cancelled) break;
-      const delta = chunk.choices[0]?.delta;
-      stopReason = chunk.choices[0]?.finish_reason || stopReason;
+    try {
+      const stream = await client.chat.completions.create(streamParams);
 
-      if (delta?.content) {
-        fullContent += delta.content;
-        sender.send('zeus:chunk', { streamId, type: 'text', text: delta.content });
-      }
+      for await (const chunk of stream) {
+        if (state.cancelled) break;
+        const delta = chunk.choices[0]?.delta;
+        stopReason = chunk.choices[0]?.finish_reason || stopReason;
 
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          if (!tcAcc[tc.index]) {
-            tcAcc[tc.index] = { id: '', name: '', args: '' };
-            if (tc.function?.name && tc.function.name !== 'task_complete') {
-              sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
+        if (delta?.content) {
+          fullContent += delta.content;
+          sender.send('zeus:chunk', { streamId, type: 'text', text: delta.content });
+        }
+
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (!tcAcc[tc.index]) {
+              tcAcc[tc.index] = { id: '', name: '', args: '' };
+              if (tc.function?.name && tc.function.name !== 'task_complete') {
+                sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
+              }
             }
+            if (tc.id) tcAcc[tc.index].id = tc.id;
+            if (tc.function?.name) tcAcc[tc.index].name += tc.function.name;
+            if (tc.function?.arguments) tcAcc[tc.index].args += tc.function.arguments;
           }
-          if (tc.id) tcAcc[tc.index].id = tc.id;
-          if (tc.function?.name) tcAcc[tc.index].name += tc.function.name;
-          if (tc.function?.arguments) tcAcc[tc.index].args += tc.function.arguments;
         }
       }
+    } catch (err) {
+      if (state.cancelled) break;
+      if (isRetryableLLMError(err) && turnRetries < TURN_MAX_RETRIES) {
+        turnRetries++;
+        sender.send('zeus:chunk', { streamId, type: 'text', text: `\n\n*(connection hiccup, retrying ${turnRetries}/${TURN_MAX_RETRIES}…)*\n\n` });
+        await sleep(1000 * 2 ** turnRetries);
+        continue;
+      }
+      throw err;
     }
+    turnRetries = 0;
 
     if (state.cancelled) break;
 
@@ -3013,6 +3152,7 @@ async function runGemini(sender, streamId, state, messages, model, apiKey, image
   }, { timeout: LLM_TIMEOUT_MS });
   let toolCallCount = 0;
   let agentContinues = 0;
+  let turnRetries = 0;
 
   const history = expandHistoryForGemini(messages.slice(0, -1));
 
@@ -3032,26 +3172,39 @@ async function runGemini(sender, streamId, state, messages, model, apiKey, image
   }
 
   while (!state.cancelled) {
-    const result = await chat.sendMessageStream(prompt);
-    prompt = undefined; // only use imageBase64 on first turn
+    let result;
     let funcCalls = [];
+    try {
+      result = await chat.sendMessageStream(prompt);
 
-    for await (const chunk of result.stream) {
-      if (state.cancelled) break;
-      try {
-        const text = chunk.text();
-        if (text) sender.send('zeus:chunk', { streamId, type: 'text', text });
-      } catch {}
+      for await (const chunk of result.stream) {
+        if (state.cancelled) break;
+        try {
+          const text = chunk.text();
+          if (text) sender.send('zeus:chunk', { streamId, type: 'text', text });
+        } catch {}
 
-      for (const cand of (chunk.candidates || [])) {
-        for (const part of (cand.content?.parts || [])) {
-          if (part.functionCall) {
-            sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: part.functionCall.name });
-            funcCalls.push(part.functionCall);
+        for (const cand of (chunk.candidates || [])) {
+          for (const part of (cand.content?.parts || [])) {
+            if (part.functionCall) {
+              sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: part.functionCall.name });
+              funcCalls.push(part.functionCall);
+            }
           }
         }
       }
+    } catch (err) {
+      if (state.cancelled) break;
+      if (isRetryableLLMError(err) && turnRetries < TURN_MAX_RETRIES) {
+        turnRetries++;
+        sender.send('zeus:chunk', { streamId, type: 'text', text: `\n\n*(connection hiccup, retrying ${turnRetries}/${TURN_MAX_RETRIES}…)*\n\n` });
+        await sleep(1000 * 2 ** turnRetries);
+        continue;
+      }
+      throw err;
     }
+    turnRetries = 0;
+    prompt = undefined; // only use imageBase64 on first turn
 
     if (state.cancelled) break;
 
@@ -3156,9 +3309,13 @@ async function runOllama(sender, streamId, state, messages, model, baseURL, imag
   // Only attempt tool calling for whitelisted models AND if not session-blacklisted
   let supportsTools = ollamaModelSupportsTools(activeModel) && !ollamaNoToolsModels.has(activeModel);
   const AGENT_MAX_ITERS_OLLAMA = 300;
+  let turnRetries = 0;
 
   while (!state.cancelled && toolCallCount < AGENT_MAX_ITERS_OLLAMA) {
-    let stream;
+    const tcAcc = {};
+    let fullContent = '';
+    let stopReason = null;
+
     try {
       const reqParams = {
         model: activeModel,
@@ -3174,8 +3331,34 @@ async function runOllama(sender, streamId, state, messages, model, baseURL, imag
         ...(supportsTools ? { tools: toOpenAITools(currentAgentMode ? AGENT_TOOLS : TOOLS) } : {}),
         ...(supportsTools && currentAgentMode ? { tool_choice: 'required' } : {}),
       };
-      stream = await client.chat.completions.create(reqParams);
+      const stream = await client.chat.completions.create(reqParams);
+
+      for await (const chunk of stream) {
+        if (state.cancelled) break;
+        const delta = chunk.choices[0]?.delta;
+        stopReason = chunk.choices[0]?.finish_reason || stopReason;
+
+        if (delta?.content) {
+          fullContent += delta.content;
+          sender.send('zeus:chunk', { streamId, type: 'text', text: delta.content });
+        }
+
+        if (supportsTools && delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (!tcAcc[tc.index]) {
+              tcAcc[tc.index] = { id: '', name: '', args: '' };
+              if (tc.function?.name && tc.function.name !== 'task_complete') {
+                sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
+              }
+            }
+            if (tc.id) tcAcc[tc.index].id = tc.id;
+            if (tc.function?.name) tcAcc[tc.index].name += tc.function.name;
+            if (tc.function?.arguments) tcAcc[tc.index].args += tc.function.arguments;
+          }
+        }
+      }
     } catch (err) {
+      if (state.cancelled) break;
       // Fast-mode (or any) model not installed — fall back to configured model
       if (err.status === 404) {
         const fallback = settings?.providers?.ollama?.model || 'llama3.2';
@@ -3203,37 +3386,15 @@ async function runOllama(sender, streamId, state, messages, model, baseURL, imag
         });
         continue;
       }
+      if (isRetryableLLMError(err) && turnRetries < TURN_MAX_RETRIES) {
+        turnRetries++;
+        sender.send('zeus:chunk', { streamId, type: 'text', text: `\n\n*(connection hiccup, retrying ${turnRetries}/${TURN_MAX_RETRIES}…)*\n\n` });
+        await sleep(1000 * 2 ** turnRetries);
+        continue;
+      }
       throw err;
     }
-
-    const tcAcc = {};
-    let fullContent = '';
-    let stopReason = null;
-
-    for await (const chunk of stream) {
-      if (state.cancelled) break;
-      const delta = chunk.choices[0]?.delta;
-      stopReason = chunk.choices[0]?.finish_reason || stopReason;
-
-      if (delta?.content) {
-        fullContent += delta.content;
-        sender.send('zeus:chunk', { streamId, type: 'text', text: delta.content });
-      }
-
-      if (supportsTools && delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          if (!tcAcc[tc.index]) {
-            tcAcc[tc.index] = { id: '', name: '', args: '' };
-            if (tc.function?.name && tc.function.name !== 'task_complete') {
-              sender.send('zeus:chunk', { streamId, type: 'tool_start', tool: tc.function.name });
-            }
-          }
-          if (tc.id) tcAcc[tc.index].id = tc.id;
-          if (tc.function?.name) tcAcc[tc.index].name += tc.function.name;
-          if (tc.function?.arguments) tcAcc[tc.index].args += tc.function.arguments;
-        }
-      }
-    }
+    turnRetries = 0;
 
     if (state.cancelled) break;
 

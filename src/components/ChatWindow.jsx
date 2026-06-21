@@ -16,7 +16,8 @@ const QUICK_ACTIONS = [
 ];
 
 function WelcomeScreen({ onSend }) {
-  const { streaming, speaking } = useStore();
+  const { streaming, speaking, settings } = useStore();
+  const assistantName = (settings?.assistantName || 'ZEUS').toUpperCase();
   return (
     <div className="flex flex-col items-center justify-center h-full px-8 hex-bg">
       {/* Orb + Logo */}
@@ -34,7 +35,7 @@ function WelcomeScreen({ onSend }) {
           className="font-orbitron font-bold tracking-[0.3em] glow-text mb-2"
           style={{ color: 'var(--c-accent)', fontSize: '32px' }}
         >
-          ZEUS
+          {assistantName}
         </h1>
         <p style={{ color: 'var(--c-muted)', fontSize: '12px', letterSpacing: '0.2em', fontFamily: 'Orbitron, sans-serif' }}>
           AI COMPUTER ASSISTANT

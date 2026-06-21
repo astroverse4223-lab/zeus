@@ -1,12 +1,14 @@
 import { useEffect, useRef, useCallback } from 'react';
 
-export default function useWakeWord({ enabled, onWake }) {
+export default function useWakeWord({ enabled, onWake, name = 'zeus' }) {
   const recRef   = useRef(null);
   const timerRef = useRef(null);
 
   const start = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR || !enabled) return;
+
+    const wakeName = (name || 'zeus').toLowerCase().trim();
 
     const rec = new SR();
     rec.continuous      = true;
@@ -17,7 +19,7 @@ export default function useWakeWord({ enabled, onWake }) {
     rec.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript.toLowerCase().trim();
-        if (t.includes('hey zeus') || t.includes('hey zues') || t === 'zeus') {
+        if (t.includes(`hey ${wakeName}`) || t === wakeName) {
           rec.stop();
           onWake?.();
           break;
@@ -38,7 +40,7 @@ export default function useWakeWord({ enabled, onWake }) {
     };
 
     try { rec.start(); } catch {}
-  }, [enabled, onWake]);
+  }, [enabled, onWake, name]);
 
   useEffect(() => {
     if (enabled) {

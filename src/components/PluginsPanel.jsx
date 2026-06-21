@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import useStore from '../store/useStore.js';
 
 const labelStyle = {
   color: 'var(--c-muted)', fontSize: '10px',
@@ -8,6 +9,9 @@ const labelStyle = {
 const MODE_COLORS = { agent: 'var(--c-accent)', chat: 'var(--c-green, #74d7a0)', both: '#a8dab5' };
 
 export default function PluginsPanel() {
+  const assistantName = useStore(s => s.settings?.assistantName || 'Zeus');
+  const settings = useStore(s => s.settings);
+  const setSettings = useStore(s => s.setSettings);
   const [list, setList] = useState([]);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
@@ -20,6 +24,18 @@ export default function PluginsPanel() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // The plugins IPC handlers mutate `settings.plugins.enabled` directly in the main
+  // process (and persist it to disk) without going through the renderer's normal
+  // saveSettings flow. If we don't mirror that back into the zustand store here, the
+  // store's `settings` object goes stale — and the next time ANYTHING else in the app
+  // calls saveSettings (changing a theme, a model, any toggle), it round-trips that
+  // stale snapshot through the backend's deepMerge, which overwrites `enabled` back to
+  // the old value. That's why plugins kept reverting after a restart.
+  const syncEnabled = (enabled) => {
+    if (!Array.isArray(enabled)) return;
+    setSettings({ ...settings, plugins: { ...(settings.plugins || {}), enabled } });
+  };
+
   const install = useCallback(async () => {
     const u = url.trim();
     if (!u || busy) return;
@@ -28,18 +44,21 @@ export default function PluginsPanel() {
     setBusy(false);
     if (res?.error) { setError(String(res.error)); return; }
     setUrl('');
+    syncEnabled(res?.enabled);
     refresh();
-  }, [url, busy, refresh]);
+  }, [url, busy, refresh, settings]);
 
   const toggle = useCallback(async (slug, on) => {
-    await window.zeus.pluginToggle(slug, on);
+    const res = await window.zeus.pluginToggle(slug, on);
+    syncEnabled(res?.enabled);
     refresh();
-  }, [refresh]);
+  }, [refresh, settings]);
 
   const remove = useCallback(async (slug) => {
-    await window.zeus.pluginRemove(slug);
+    const res = await window.zeus.pluginRemove(slug);
+    syncEnabled(res?.enabled);
     refresh();
-  }, [refresh]);
+  }, [refresh, settings]);
 
   const inputStyle = {
     flex: 1, padding: '7px 10px', borderRadius: 6, fontSize: '11px',
@@ -57,7 +76,7 @@ export default function PluginsPanel() {
       <div>
         <label style={labelStyle}>PLUGINS</label>
         <div style={{ fontSize: '11px', color: 'var(--c-muted)', marginTop: 4 }}>
-          Install skill packs from GitHub — they steer Zeus in agent &amp; chat mode.
+          Install skill packs from GitHub — they steer {assistantName} in agent &amp; chat mode.
         </div>
       </div>
 

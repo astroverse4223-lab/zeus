@@ -198,9 +198,11 @@ function removePlugin(baseDir, slug) {
 
 /**
  * Concatenate the skill text of enabled plugins that apply to `mode` ('agent'|'chat').
- * Returns '' when nothing applies. Result is capped to MAX_PROMPT_BYTES.
+ * Returns '' when nothing applies. Result is capped to `maxBytes` (default MAX_PROMPT_BYTES) —
+ * callers running a local model pass a much smaller budget, since a 120KB system prompt that's
+ * cheap for a cloud API to reprocess is a brutal prefill cost on consumer GPU/CPU hardware.
  */
-function loadEnabledSkills(baseDir, enabledSlugs, mode) {
+function loadEnabledSkills(baseDir, enabledSlugs, mode, maxBytes = MAX_PROMPT_BYTES) {
   if (!Array.isArray(enabledSlugs) || enabledSlugs.length === 0) return '';
   const enabled = new Set(enabledSlugs.map(slugify));
   let out = '';
@@ -213,7 +215,7 @@ function loadEnabledSkills(baseDir, enabledSlugs, mode) {
     }
     if (!body.trim()) continue;
     out += `\n\n# Plugin: ${meta.name}\n${body.trim()}`;
-    if (Buffer.byteLength(out) > MAX_PROMPT_BYTES) { out = out.slice(0, MAX_PROMPT_BYTES); break; }
+    if (Buffer.byteLength(out) > maxBytes) { out = out.slice(0, maxBytes); break; }
   }
   return out.trim();
 }

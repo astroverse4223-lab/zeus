@@ -96,6 +96,12 @@ html, body, #root {
   animation-name: none;
 }
 
+/* Matrix rain — visuals are drawn by a canvas (MatrixRainBackground), not CSS */
+[data-pattern="matrixrain"] .zeus-bg {
+  background-image: none;
+  animation-name: none;
+}
+
 /* Diagonal grid */
 [data-pattern="diagonal"] .zeus-bg {
   background-image:

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import Orb from './Orb.jsx';
+import useStore from '../store/useStore.js';
 
 const LINES = [
   'INITIALIZING NEURAL CORE',
@@ -12,6 +13,7 @@ const LINES = [
 
 export default function BootSequence({ onDone }) {
   const [step, setStep] = useState(0);
+  const assistantName = useStore(s => (s.settings?.assistantName || 'ZEUS').toUpperCase());
 
   useEffect(() => {
     const timers = [];
@@ -45,7 +47,7 @@ export default function BootSequence({ onDone }) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.25 }}
       >
-        ZEUS
+        {assistantName}
       </motion.h1>
 
       <div style={{ height: 96, marginTop: 18, width: 280 }}>

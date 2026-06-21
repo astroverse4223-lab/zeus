@@ -238,7 +238,7 @@ function AppearanceTab({ local, setLocal, setSettings }) {
         <div>
           <label style={labelStyle}>BACKGROUND PATTERN</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 8 }}>
-            {[['grid','Grid'],['dots','Dots'],['lines','Lines'],['circuit','Circuit'],['diagonal','Diagonal'],['crosshatch','Cross'],['mesh','Aurora'],['carbon','Carbon'],['scanlines','CRT'],['waves','Waves'],['starfield','Stars'],['none','None']].map(([val,lbl]) => {
+            {[['grid','Grid'],['dots','Dots'],['lines','Lines'],['circuit','Circuit'],['diagonal','Diagonal'],['crosshatch','Cross'],['mesh','Aurora'],['carbon','Carbon'],['scanlines','CRT'],['waves','Waves'],['starfield','Stars'],['matrixrain','Matrix'],['none','None']].map(([val,lbl]) => {
               const active = (ui.backgroundPattern||'grid') === val;
               return (
                 <button key={val} onClick={() => saveUi('backgroundPattern', val)} style={{
@@ -367,6 +367,7 @@ const NavIcons = {
   providers: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>,
   models:    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
   chat:      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+  commands:  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>,
   integrations:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
   memory:    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
   behavior:  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
@@ -378,6 +379,7 @@ const TABS = [
   { id: 'providers',    label: 'Providers' },
   { id: 'models',       label: 'Models' },
   { id: 'chat',         label: 'AI Chat' },
+  { id: 'commands',     label: 'Commands' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'memory',       label: 'Memory' },
   { id: 'behavior',     label: 'System' },
@@ -402,6 +404,7 @@ export default function Settings() {
   }, [tab]);
 
   if (!local) return null;
+  const assistantName = local.assistantName || 'Zeus';
 
   // ── Mutators ────────────────────────────────────────────────────────────────
   const setKey   = (p, k) => setLocal(l => ({ ...l, providers: { ...l.providers, [p]: { ...l.providers[p], apiKey: k } } }));
@@ -411,6 +414,21 @@ export default function Settings() {
   const setSystem      = (k, v) => setLocal(l => ({ ...l, system: { ...(l.system || {}), [k]: v } }));
   const setIntegration = (svc, k, v) => setLocal(l => ({
     ...l, integrations: { ...l.integrations, [svc]: { ...l.integrations?.[svc], [k]: v } },
+  }));
+  const addCommand = () => setLocal(l => ({
+    ...l,
+    customCommands: [
+      ...(l.customCommands || []),
+      { id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, trigger: '', kind: 'reply', value: '' },
+    ],
+  }));
+  const updateCommand = (i, patch) => setLocal(l => {
+    const list = [...(l.customCommands || [])];
+    list[i] = { ...list[i], ...patch };
+    return { ...l, customCommands: list };
+  });
+  const removeCommand = (i) => setLocal(l => ({
+    ...l, customCommands: (l.customCommands || []).filter((_, idx) => idx !== i),
   }));
 
   const save = async () => {
@@ -427,13 +445,13 @@ export default function Settings() {
   };
 
   const clearAllMemory = async () => {
-    if (!confirm('Clear all persistent memory? Zeus will forget everything about you.')) return;
+    if (!confirm(`Clear all persistent memory? ${assistantName} will forget everything about you.`)) return;
     const cleared = { facts: [], preferences: [], notes: [] };
     setMemory(cleared);
     await window.zeus?.saveMemory(cleared);
   };
 
-  const needsSave = ['providers', 'chat', 'integrations', 'behavior'].includes(tab);
+  const needsSave = ['providers', 'chat', 'commands', 'integrations', 'behavior'].includes(tab);
 
   return (
     <div className="flex flex-col h-full settings-panel overflow-hidden" style={{ position: 'relative' }}>
@@ -456,7 +474,7 @@ export default function Settings() {
             </svg>
           </div>
           <div>
-            <p className="font-orbitron font-bold tracking-widest" style={{ color: 'var(--c-accent)', fontSize: '11px', letterSpacing: '0.18em' }}>ZEUS SETTINGS</p>
+            <p className="font-orbitron font-bold tracking-widest" style={{ color: 'var(--c-accent)', fontSize: '11px', letterSpacing: '0.18em' }}>{(settings?.assistantName || 'ZEUS').toUpperCase()} SETTINGS</p>
             <p style={{ color: 'var(--c-muted)', fontSize: '9px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em', marginTop: 1 }}>
               {TABS.find(t => t.id === tab)?.label?.toUpperCase()}
             </p>
@@ -613,7 +631,7 @@ export default function Settings() {
               />
               <div>
                 <label style={{ ...labelStyle, display: 'block', marginBottom: 4 }}>ADDITIONAL SYSTEM INSTRUCTIONS</label>
-                <p style={{ color: 'var(--c-muted)', fontSize: '11px', marginBottom: 8 }}>Appended to Zeus's core prompt. Be specific and concise.</p>
+                <p style={{ color: 'var(--c-muted)', fontSize: '11px', marginBottom: 8 }}>Appended to {assistantName}'s core prompt in both Chat and Agent mode. Be specific and concise.</p>
                 <textarea className="api-key-input w-full rounded-lg px-3 py-2 text-sm" rows={4}
                   placeholder={`Always respond in markdown. Be concise. Prefer bullet points...`}
                   style={{ resize: 'vertical', fontFamily: 'Inter, sans-serif' }}
@@ -622,8 +640,17 @@ export default function Settings() {
                 />
               </div>
               <div>
+                <label style={{ ...labelStyle, display: 'block', marginBottom: 4 }}>ASSISTANT NAME</label>
+                <p style={{ color: 'var(--c-muted)', fontSize: '11px', marginBottom: 8 }}>What it calls itself — title bar, message labels, and its own system prompt</p>
+                <input type="text" className="api-key-input w-full rounded-lg px-3 py-2 text-sm"
+                  placeholder="ZEUS"
+                  value={local.assistantName || ''}
+                  onChange={e => setLocal(l => ({ ...l, assistantName: e.target.value }))}
+                />
+              </div>
+              <div>
                 <label style={{ ...labelStyle, display: 'block', marginBottom: 4 }}>YOUR NAME</label>
-                <p style={{ color: 'var(--c-muted)', fontSize: '11px', marginBottom: 8 }}>How Zeus addresses you</p>
+                <p style={{ color: 'var(--c-muted)', fontSize: '11px', marginBottom: 8 }}>How it addresses you</p>
                 <input type="text" className="api-key-input w-full rounded-lg px-3 py-2 text-sm"
                   placeholder="Sir"
                   value={local.userName || ''}
@@ -680,6 +707,91 @@ export default function Settings() {
             </div>
           )}
 
+          {/* ═══ CUSTOM COMMANDS ═══════════════════════════════════════════════ */}
+          {tab === 'commands' && (
+            <div className="flex flex-col gap-4">
+              <SectionHeader
+                icon={<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" strokeWidth="2" strokeLinecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>}
+                label="CUSTOM COMMANDS"
+              />
+              <p style={{ color: 'var(--c-muted)', fontSize: '11px', lineHeight: 1.6 }}>
+                Type the trigger phrase into chat <strong style={{ color: 'var(--c-dim)' }}>exactly</strong> as written
+                below and it fires instantly — no AI call, no waiting. Use it for canned answers
+                ("wifi password" → a fixed reply) or real PC actions ("good night" → lock the screen).
+              </p>
+
+              <div className="flex flex-col gap-3">
+                {(local.customCommands || []).map((cmd, i) => (
+                  <div key={cmd.id} className="rounded-xl p-3 flex flex-col gap-2" style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)' }}>
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="api-key-input flex-1 rounded-lg px-2 py-1.5 text-sm"
+                        placeholder='Trigger phrase, e.g. "good night"'
+                        value={cmd.trigger}
+                        onChange={e => updateCommand(i, { trigger: e.target.value })}
+                      />
+                      <button onClick={() => removeCommand(i)} title="Remove"
+                        style={{ background: 'none', border: 'none', color: 'var(--c-red)', cursor: 'pointer', fontSize: 14, flexShrink: 0, padding: '0 4px' }}>
+                        ✕
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <select
+                        className="api-key-input rounded-lg px-2 py-1.5 text-sm flex-shrink-0"
+                        style={{ background: 'var(--c-card)', width: 140 }}
+                        value={cmd.kind}
+                        onChange={e => updateCommand(i, { kind: e.target.value })}
+                      >
+                        <option value="reply">Canned reply</option>
+                        <option value="run_command">Run command</option>
+                        <option value="open_app">Open app</option>
+                        <option value="open_url">Open URL</option>
+                      </select>
+                      {cmd.kind === 'reply' ? (
+                        <textarea
+                          className="api-key-input flex-1 rounded-lg px-2 py-1.5 text-sm" rows={2}
+                          placeholder="What it replies with"
+                          style={{ resize: 'vertical', fontFamily: 'Inter, sans-serif' }}
+                          value={cmd.value}
+                          onChange={e => updateCommand(i, { value: e.target.value })}
+                        />
+                      ) : (
+                        <input
+                          className="api-key-input flex-1 rounded-lg px-2 py-1.5 text-sm"
+                          placeholder={
+                            cmd.kind === 'run_command' ? 'rundll32.exe user32.dll,LockWorkStation'
+                            : cmd.kind === 'open_app' ? 'spotify'
+                            : 'https://example.com'
+                          }
+                          value={cmd.value}
+                          onChange={e => updateCommand(i, { value: e.target.value })}
+                        />
+                      )}
+                    </div>
+                    {cmd.kind !== 'reply' && (
+                      <p style={{ color: 'var(--c-muted)', fontSize: '10px' }}>
+                        ⚠ Runs a real action on your PC — you'll be asked to confirm each time it fires.
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {(local.customCommands || []).length === 0 && (
+                  <p style={{ color: 'var(--c-muted)', fontSize: '11px', textAlign: 'center', padding: '12px 0' }}>
+                    No custom commands yet.
+                  </p>
+                )}
+              </div>
+
+              <button
+                className="btn-ghost rounded-xl py-2.5 text-sm font-orbitron tracking-widest"
+                style={{ fontSize: 11, letterSpacing: '0.1em' }}
+                onClick={addCommand}
+              >
+                + ADD COMMAND
+              </button>
+            </div>
+          )}
+
           {/* ═══ SYSTEM / BEHAVIOR ═════════════════════════════════════════════ */}
           {tab === 'behavior' && (
             <div className="flex flex-col gap-4">
@@ -716,9 +828,9 @@ export default function Settings() {
                 label="WINDOW"
               />
 
-              <ToggleRow label="Always on Top" desc="Zeus window stays above all other windows" value={!!local.system?.alwaysOnTop} onChange={v => setSystem('alwaysOnTop', v)} />
-              <ToggleRow label="Launch at Startup" desc="Start Zeus automatically when Windows boots" value={!!local.system?.launchAtStartup} onChange={v => setSystem('launchAtStartup', v)} />
-              <ToggleRow label="Clear Chats on Exit" desc="Delete all conversations when Zeus closes" value={!!local.system?.clearChatOnExit} onChange={v => setSystem('clearChatOnExit', v)} />
+              <ToggleRow label="Always on Top" desc={`${assistantName} window stays above all other windows`} value={!!local.system?.alwaysOnTop} onChange={v => setSystem('alwaysOnTop', v)} />
+              <ToggleRow label="Launch at Startup" desc={`Start ${assistantName} automatically when Windows boots`} value={!!local.system?.launchAtStartup} onChange={v => setSystem('launchAtStartup', v)} />
+              <ToggleRow label="Clear Chats on Exit" desc={`Delete all conversations when ${assistantName} closes`} value={!!local.system?.clearChatOnExit} onChange={v => setSystem('clearChatOnExit', v)} />
 
               <div>
                 <label style={{ ...labelStyle, display: 'block', marginBottom: 6 }}>GLOBAL HOTKEY</label>
@@ -727,7 +839,7 @@ export default function Settings() {
                   value={local.system?.globalHotkey || ''}
                   onChange={e => setSystem('globalHotkey', e.target.value)}
                 />
-                <p style={{ ...hintStyle, marginTop: 5 }}>Requires restart. Focuses Zeus from anywhere.</p>
+                <p style={{ ...hintStyle, marginTop: 5 }}>Requires restart. Focuses {assistantName} from anywhere.</p>
               </div>
 
               <div style={{ borderTop: '1px solid var(--c-border)', paddingTop: 4 }} />
@@ -792,7 +904,7 @@ export default function Settings() {
                     <span style={{ fontSize: 18 }}>✈️</span>
                     <div>
                       <p style={{ color: 'var(--c-text)', fontWeight: 600, fontSize: '13px' }}>Telegram Bot</p>
-                      <p style={{ color: 'var(--c-muted)', fontSize: '10px' }}>Message Zeus from anywhere</p>
+                      <p style={{ color: 'var(--c-muted)', fontSize: '10px' }}>Message {assistantName} from anywhere</p>
                     </div>
                   </div>
                   <Toggle value={!!local.integrations?.telegram?.enabled} onChange={v => setIntegration('telegram', 'enabled', v)} />
@@ -837,7 +949,7 @@ export default function Settings() {
                   <p style={{ color: 'var(--c-text)', fontWeight: 600, fontSize: '12px' }}>Weather</p>
                   <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,255,136,0.1)', border: '1px solid rgba(0,255,136,0.3)', color: 'var(--c-green)', fontSize: '9px', fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.06em' }}>FREE · NO KEY</span>
                 </div>
-                <p style={{ color: 'var(--c-muted)', fontSize: '10px' }}>Powered by wttr.in — just ask Zeus for the weather anywhere.</p>
+                <p style={{ color: 'var(--c-muted)', fontSize: '10px' }}>Powered by wttr.in — just ask {assistantName} for the weather anywhere.</p>
               </div>
 
               <div className="rounded-xl p-3" style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)' }}>
@@ -846,7 +958,7 @@ export default function Settings() {
                   <p style={{ color: 'var(--c-text)', fontWeight: 600, fontSize: '12px' }}>Any REST API</p>
                 </div>
                 <p style={{ color: 'var(--c-muted)', fontSize: '10px', lineHeight: 1.55 }}>
-                  Zeus has an <span style={{ color: 'var(--c-accent)' }}>http_request</span> tool that can call any API — Home Assistant, Slack, Notion, Discord, and more.
+                  {assistantName} has an <span style={{ color: 'var(--c-accent)' }}>http_request</span> tool that can call any API — Home Assistant, Slack, Notion, Discord, and more.
                 </p>
               </div>
             </div>
@@ -883,7 +995,7 @@ export default function Settings() {
                   label="PERSISTENT MEMORY"
                 />
 
-                <ToggleRow label="Persistent Memory" desc="Zeus remembers facts about you across all conversations" value={local.memory?.enabled !== false} onChange={v => setLocal(l => ({ ...l, memory: { ...l.memory, enabled: v } }))} />
+                <ToggleRow label="Persistent Memory" desc={`${assistantName} remembers facts about you across all conversations`} value={local.memory?.enabled !== false} onChange={v => setLocal(l => ({ ...l, memory: { ...l.memory, enabled: v } }))} />
 
                 {/* Stats bar — accurate totals from real data */}
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--c-border)' }}>
@@ -1020,7 +1132,7 @@ export default function Settings() {
                           <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
                         </svg>
                         <p style={{ color: 'var(--c-muted)', fontSize: '12px', textAlign: 'center', maxWidth: 200 }}>
-                          No memories yet.<br/>Tell Zeus to remember something — like your name, preferences, or project paths.
+                          No memories yet.<br/>Tell {assistantName} to remember something — like your name, preferences, or project paths.
                         </p>
                       </div>
                     )}
@@ -1085,7 +1197,7 @@ export default function Settings() {
                   ['🎤','Voice','Speech-to-text input'],
                   ['⚡','Tools','30+ built-in automation tools'],
                   ['💾','Memory','Persistent memory across conversations'],
-                  ['✈️','Telegram','Message Zeus from anywhere'],
+                  ['✈️','Telegram',`Message ${assistantName} from anywhere`],
                   ['</>','Code Agent','Autonomous coding in any directory'],
                 ].map(([icon,title,desc]) => (
                   <div key={title} className="flex items-start gap-3 mb-3">
