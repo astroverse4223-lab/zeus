@@ -13,10 +13,14 @@ import Notepad from './components/Notepad.jsx';
 import ModelCompare from './components/ModelCompare.jsx';
 import ImageEditor from './components/ImageEditor.jsx';
 import ImageGen from './components/ImageGen.jsx';
+import VideoGen from './components/VideoGen.jsx';
+import ContentFactory from './components/ContentFactory.jsx';
 import VaultPanel from './components/VaultPanel.jsx';
 import BootSequence from './components/BootSequence.jsx';
 import SnakeGame from './components/SnakeGame.jsx';
+import Arcade from './components/Arcade.jsx';
 import MatrixRainBackground from './components/MatrixRainBackground.jsx';
+import MinimizedDock from './components/MinimizedDock.jsx';
 import IdleScreensaver from './components/IdleScreensaver.jsx';
 import useWakeWord from './hooks/useWakeWord.js';
 import { speak, stopSpeaking } from './lib/speech.js';
@@ -31,8 +35,11 @@ export default function App() {
     compareOpen, setCompareOpen,
     imageEditorOpen, setImageEditorOpen,
     imageGenOpen, setImageGenOpen,
+    videoGenOpen, setVideoGenOpen,
+    contentFactoryOpen, setContentFactoryOpen,
     vaultOpen, setVaultOpen,
     snakeOpen, setSnakeOpen,
+    arcadeOpen, setArcadeOpen,
     sidebarOpen,
     activeId, getActive,
     newConversation,
@@ -449,6 +456,7 @@ export default function App() {
   return (
     <div className="flex flex-col w-full h-full zeus-bg overflow-hidden">
       <MatrixRainBackground />
+      <MinimizedDock />
 
       <AnimatePresence>
         {booting && <BootSequence key="boot" onDone={() => setBooting(false)} />}
@@ -524,6 +532,8 @@ export default function App() {
       {/* Image generator — full-screen overlay */}
       <AnimatePresence>
         {imageGenOpen && <ImageGen key="image-gen" onClose={() => setImageGenOpen(false)} />}
+        {videoGenOpen && <VideoGen key="video-gen" onClose={() => setVideoGenOpen(false)} />}
+        {contentFactoryOpen && <ContentFactory key="content-factory" onClose={() => setContentFactoryOpen(false)} />}
       </AnimatePresence>
 
       {/* Password vault — full-screen overlay */}
@@ -534,6 +544,11 @@ export default function App() {
       {/* Hidden logo-click easter egg */}
       <AnimatePresence>
         {snakeOpen && <SnakeGame key="snake" onClose={() => setSnakeOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Arcade — full-screen overlay */}
+      <AnimatePresence>
+        {arcadeOpen && <Arcade key="arcade" onClose={() => setArcadeOpen(false)} />}
       </AnimatePresence>
 
       <IdleScreensaver />

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { motion } from 'framer-motion';
 import { v4 as uuid } from 'uuid';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import useStore from '../store/useStore.js';
 import { MODELS } from './InputBar.jsx';
+import FloatingPanel from './FloatingPanel.jsx';
 
 const PROVIDERS = [
   { id: 'anthropic', label: 'Anthropic' },
@@ -101,41 +101,31 @@ export default function ModelCompare({ onClose }) {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
-      else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, run]);
+  }, [run]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      className="absolute inset-0 z-[60] flex flex-col"
-      style={{ background: 'var(--c-bg)' }}
-    >
-      {/* Title bar */}
-      <div className="flex items-center gap-3 px-4 flex-shrink-0"
-        style={{ height: 40, borderBottom: '1px solid var(--c-border)', background: '#080c14' }}>
+    <FloatingPanel
+      id="model-compare" title="MODEL COMPARE" onClose={onClose}
+      defaultWidth={1200} defaultHeight={760}
+      icon={
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="7" height="18" rx="1" /><rect x="14" y="3" width="7" height="18" rx="1" />
         </svg>
-        <span style={{ color: 'var(--c-accent)', fontSize: 11, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.12em' }}>
-          MODEL COMPARE
-        </span>
-        <div className="flex-1" />
-        <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: panes.length < 4 ? 'var(--c-accent)' : 'var(--c-muted)' }}
-          onClick={addPane} disabled={panes.length >= 4}>
-          + ADD MODEL
-        </button>
-        <button className="btn-icon w-6 h-6" onClick={onClose} title="Close (Esc)">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
+      }
+      headerExtra={
+        <>
+          <div className="flex-1" />
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: panes.length < 4 ? 'var(--c-accent)' : 'var(--c-muted)' }}
+            onClick={addPane} disabled={panes.length >= 4}>
+            + ADD MODEL
+          </button>
+        </>
+      }
+    >
       {/* Prompt row */}
       <div className="flex items-end gap-2 px-4 py-3 flex-shrink-0" style={{ borderBottom: '1px solid var(--c-border)' }}>
         <textarea
@@ -233,6 +223,6 @@ export default function ModelCompare({ onClose }) {
           </div>
         ))}
       </div>
-    </motion.div>
+    </FloatingPanel>
   );
 }

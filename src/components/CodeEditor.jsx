@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { motion } from 'framer-motion';
 import Editor from '@monaco-editor/react';
 import { langFromPath } from '../lib/monaco.js';
 import { registerEmmet } from '../lib/emmet.js';
 import { isFormattable, formatCode } from '../lib/prettier.js';
+import FloatingPanel from './FloatingPanel.jsx';
 
 // File-type → tiny color dot, so the tree reads at a glance.
 function dotColor(name, isDir) {
@@ -612,16 +612,22 @@ export default function CodeEditor({ onClose }) {
 
   const openContextMenu = useCallback((x, y, entry) => setContextMenu({ x, y, entry }), []);
 
-  // Ctrl+S → save active file (in the focused pane). Esc → close editor.
+  // Ctrl+S → save active file (in the focused pane). Escape is handled by
+  // FloatingPanel's onEscape below, which knows about nested dialogs.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
       else if (e.shiftKey && e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); formatActive(); }
-      else if (e.key === 'Escape') { if (promptState) return; if (newProjectOpen) setNewProjectOpen(false); else onClose(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [save, formatActive, onClose, newProjectOpen, promptState]);
+  }, [save, formatActive]);
+
+  const handleEscape = useCallback(() => {
+    if (promptState) return;
+    if (newProjectOpen) setNewProjectOpen(false);
+    else onClose();
+  }, [promptState, newProjectOpen, onClose]);
 
   const activeTab = tabs.find(t => t.path === activePath) || null;
   const focusedTab = focusedSide === 'main' ? activeTab : splitTabs.find(t => t.path === splitActivePath) || null;
@@ -630,65 +636,56 @@ export default function CodeEditor({ onClose }) {
     : null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      className="absolute inset-0 z-[60] flex flex-col"
-      style={{ background: 'var(--c-bg)' }}
-    >
-      {/* Title bar */}
-      <div className="flex items-center gap-3 px-4 flex-shrink-0"
-        style={{ height: 40, borderBottom: '1px solid var(--c-border)', background: '#080c14' }}>
+    <FloatingPanel
+      id="code-editor" title="CODE EDITOR" onClose={onClose} onEscape={handleEscape}
+      defaultWidth={1300} defaultHeight={820}
+      icon={
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" strokeWidth="2" strokeLinecap="round">
           <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
         </svg>
-        <span style={{ color: 'var(--c-accent)', fontSize: 11, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.12em' }}>
-          CODE EDITOR
-        </span>
-        <span style={{ color: 'var(--c-muted)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
-          {rootDir ? rootDir.split(/[\\/]/).pop() : 'no folder'}
-        </span>
-        <div className="flex-1" />
-        <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-accent)' }} onClick={() => setNewProjectOpen(true)}>
-          NEW PROJECT
-        </button>
-        <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)' }} onClick={openFolder}>
-          OPEN FOLDER
-        </button>
-        {focusedTab && (
-          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: focusedTab.dirty ? 'var(--c-accent)' : 'var(--c-muted)', opacity: focusedTab.dirty ? 1 : 0.5 }}
-            onClick={save} disabled={!focusedTab.dirty} title="Ctrl+S">
-            {focusedTab.dirty ? 'SAVE •' : 'SAVE'}
+      }
+      headerExtra={
+        <>
+          <span style={{ color: 'var(--c-muted)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+            {rootDir ? rootDir.split(/[\\/]/).pop() : 'no folder'}
+          </span>
+          <div className="flex-1" />
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-accent)' }} onClick={() => setNewProjectOpen(true)}>
+            NEW PROJECT
           </button>
-        )}
-        <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: autoSave ? 'var(--c-green)' : 'var(--c-muted)' }}
-          onClick={() => setAutoSave(v => !v)} title="Automatically save 700ms after you stop typing">
-          AUTO SAVE: {autoSave ? 'ON' : 'OFF'}
-        </button>
-        {focusedTab && isFormattable(focusedTab.lang) && (
-          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)' }} onClick={formatActive} title="Shift+Alt+F">
-            FORMAT
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)' }} onClick={openFolder}>
+            OPEN FOLDER
           </button>
-        )}
-        {rootDir && (
-          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: previewOpen ? 'var(--c-green)' : 'var(--c-muted)' }}
-            onClick={togglePreview}>
-            {previewOpen ? 'HIDE PREVIEW' : 'PREVIEW'}
+          {focusedTab && (
+            <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: focusedTab.dirty ? 'var(--c-accent)' : 'var(--c-muted)', opacity: focusedTab.dirty ? 1 : 0.5 }}
+              onClick={save} disabled={!focusedTab.dirty} title="Ctrl+S">
+              {focusedTab.dirty ? 'SAVE •' : 'SAVE'}
+            </button>
+          )}
+          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: autoSave ? 'var(--c-green)' : 'var(--c-muted)' }}
+            onClick={() => setAutoSave(v => !v)} title="Automatically save 700ms after you stop typing">
+            AUTO SAVE: {autoSave ? 'ON' : 'OFF'}
           </button>
-        )}
-        {rootDir && (
-          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: liveServer ? 'var(--c-green)' : 'var(--c-muted)' }}
-            onClick={toggleLiveServer} title="Serves the project at a local URL and auto-reloads your browser on every file change">
-            {liveServer ? `LIVE · :${liveServer.port}` : 'GO LIVE'}
-          </button>
-        )}
-        <button className="btn-icon w-6 h-6" onClick={onClose} title="Close (Esc)">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
+          {focusedTab && isFormattable(focusedTab.lang) && (
+            <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)' }} onClick={formatActive} title="Shift+Alt+F">
+              FORMAT
+            </button>
+          )}
+          {rootDir && (
+            <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: previewOpen ? 'var(--c-green)' : 'var(--c-muted)' }}
+              onClick={togglePreview}>
+              {previewOpen ? 'HIDE PREVIEW' : 'PREVIEW'}
+            </button>
+          )}
+          {rootDir && (
+            <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: liveServer ? 'var(--c-green)' : 'var(--c-muted)' }}
+              onClick={toggleLiveServer} title="Serves the project at a local URL and auto-reloads your browser on every file change">
+              {liveServer ? `LIVE · :${liveServer.port}` : 'GO LIVE'}
+            </button>
+          )}
+        </>
+      }
+    >
       <div className="flex flex-1 overflow-hidden">
         {/* Activity bar */}
         <div className="flex flex-col items-center flex-shrink-0 py-2 gap-1"
@@ -789,6 +786,6 @@ export default function CodeEditor({ onClose }) {
           onDelete={() => deleteEntry(contextMenu.entry)}
         />
       )}
-    </motion.div>
+    </FloatingPanel>
   );
 }

@@ -50,7 +50,7 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
   const {
     settings, setSettings, streaming, fastMode, agentMode, setAgentMode, agentDir,
     draft: text, setDraft: setText, pendingImage, setPendingImage,
-    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen, setImageGenOpen, setVaultOpen,
+    setEditorOpen, setNotepadOpen, setCompareOpen, setImageEditorOpen, setImageGenOpen, setVideoGenOpen, setContentFactoryOpen, setVaultOpen, setArcadeOpen,
   } = useStore();
   const [listening, setListening] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
@@ -438,8 +438,14 @@ export default function InputBar({ onSend, onStop, onOpenAgent, terminalOpen, on
                     icon: <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></> },
                   { label: 'Generate image', stroke: 'var(--c-accent)', onClick: () => setImageGenOpen(true),
                     icon: <><path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z"/></> },
+                  { label: 'Generate video', stroke: 'var(--c-accent)', onClick: () => setVideoGenOpen(true),
+                    icon: <><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></> },
+                  { label: 'Content Factory', stroke: 'var(--c-accent)', onClick: () => setContentFactoryOpen(true),
+                    icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
                   { label: 'Password vault', stroke: 'var(--c-accent)', onClick: () => setVaultOpen(true),
                     icon: <><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></> },
+                  { label: 'Arcade', stroke: 'var(--c-accent)', onClick: () => setArcadeOpen(true),
+                    icon: <><rect x="2" y="6" width="20" height="13" rx="4"/><line x1="7" y1="12.5" x2="7" y2="12.5"/><line x1="5" y1="10.5" x2="5" y2="14.5"/><line x1="3" y1="12.5" x2="9" y2="12.5"/><circle cx="16" cy="10.5" r="1"/><circle cx="19" cy="13.5" r="1"/></> },
                   { label: 'Screenshot', stroke: 'var(--c-accent)', onClick: captureScreen,
                     icon: <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></> },
                   ...(onToggleTerminal ? [{

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
+import FloatingPanel from './FloatingPanel.jsx';
 
 const STRENGTH_COLORS = ['#ff3366', '#ff6b35', '#ffcc00', '#00d4ff', '#00ff88'];
 
@@ -295,12 +296,6 @@ export default function VaultPanel({ onClose }) {
     })();
   }, [refreshList]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const doSetup = async () => {
     setError('');
     if (pw1.length < 4) return setError('Master password must be at least 4 characters.');
@@ -374,36 +369,26 @@ export default function VaultPanel({ onClose }) {
   );
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      className="absolute inset-0 z-[60] flex flex-col"
-      style={{ background: 'var(--c-bg)' }}
+    <FloatingPanel
+      id="vault" title="PASSWORD VAULT" onClose={onClose}
+      defaultWidth={920} defaultHeight={620}
+      icon={<LockIcon />}
+      headerExtra={
+        <>
+          {mode === 'unlocked' && (
+            <span style={{ color: 'var(--c-muted)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+              {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
+            </span>
+          )}
+          <div className="flex-1" />
+          {mode === 'unlocked' && (
+            <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)', border: '1px solid var(--c-border)' }} onClick={doLock}>
+              🔒 LOCK
+            </button>
+          )}
+        </>
+      }
     >
-      {/* Title bar */}
-      <div className="flex items-center gap-3 px-4 flex-shrink-0" style={{ height: 40, borderBottom: '1px solid var(--c-border)', background: '#080c14' }}>
-        <LockIcon />
-        <span style={{ color: 'var(--c-accent)', fontSize: 11, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.12em' }}>
-          PASSWORD VAULT
-        </span>
-        {mode === 'unlocked' && (
-          <span style={{ color: 'var(--c-muted)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
-            {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
-          </span>
-        )}
-        <div className="flex-1" />
-        {mode === 'unlocked' && (
-          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-muted)', border: '1px solid var(--c-border)' }} onClick={doLock}>
-            🔒 LOCK
-          </button>
-        )}
-        <button className="btn-icon w-6 h-6" onClick={onClose} title="Close (Esc)">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
       {/* Loading */}
       {mode === 'loading' && (
         <div className="flex-1 flex items-center justify-center">
@@ -546,6 +531,6 @@ export default function VaultPanel({ onClose }) {
           </div>
         </div>
       )}
-    </motion.div>
+    </FloatingPanel>
   );
 }

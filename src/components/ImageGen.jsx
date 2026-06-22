@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
 import useStore from '../store/useStore.js';
+import FloatingPanel from './FloatingPanel.jsx';
 
 const LOCAL_SIZES = [['512x512','512²'],['768x768','768²'],['512x768','512×768'],['768x512','768×512'],['1024x1024','1024²']];
 const HOSTED_SIZES = [['1024x1024','Square'],['1792x1024','Wide'],['1024x1792','Tall']];
@@ -14,19 +14,27 @@ const fieldStyle = {
 const labelStyle = { color: 'var(--c-muted)', fontSize: 10, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.08em', display: 'block', marginBottom: 5 };
 
 export default function ImageGen({ onClose }) {
-  const { settings, setSettings, setImageEditorSource, setImageEditorOpen } = useStore();
+  const { settings, setSettings, setImageEditorSource, setImageEditorOpen, genPromptPrefill, setGenPromptPrefill } = useStore();
 
-  const [backend, setBackend] = useState(settings?.imageGen?.backend || 'comfyui'); // 'comfyui' | 'hosted'
+  const [backend, setBackend] = useState(settings?.imageGen?.backend || 'comfyui'); // 'comfyui' | 'hosted' | 'replicate'
   const [apiKey, setApiKey] = useState(settings?.imageGen?.openaiApiKey || settings?.providers?.openai?.apiKey || '');
+  const [replicateApiKey, setReplicateApiKey] = useState(settings?.imageGen?.replicateApiKey || settings?.videoGen?.replicateApiKey || '');
+  const [replicateModel, setReplicateModel] = useState(settings?.imageGen?.replicateModel || 'black-forest-labs/flux-schnell');
   const [showKey, setShowKey] = useState(false);
 
   const [status, setStatus] = useState({ checking: true });
   const [checkpoints, setCheckpoints] = useState([]);
   const [ckpt, setCkpt] = useState('');
 
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(genPromptPrefill || '');
   const [negative, setNegative] = useState('');
   const [size, setSize] = useState('512x512');
+
+  // Content Factory hands off a generated prompt via the store, then opens this
+  // panel — consume it once on mount so it doesn't leak into the next open.
+  useEffect(() => {
+    if (genPromptPrefill) setGenPromptPrefill(null);
+  }, []);
   const [steps, setSteps] = useState(25);
   const [cfg, setCfg] = useState(7);
   const [sampler, setSampler] = useState('euler');
@@ -46,13 +54,23 @@ export default function ImageGen({ onClose }) {
 
   const selectBackend = useCallback((b) => {
     setBackend(b);
-    setSize(b === 'hosted' ? '1024x1024' : '512x512');
+    setSize(b === 'comfyui' ? '512x512' : '1024x1024');
     persist({ backend: b });
   }, [persist]);
 
   const onApiKeyChange = useCallback((v) => {
     setApiKey(v);
     persist({ openaiApiKey: v });
+  }, [persist]);
+
+  const onReplicateApiKeyChange = useCallback((v) => {
+    setReplicateApiKey(v);
+    persist({ replicateApiKey: v });
+  }, [persist]);
+
+  const onReplicateModelChange = useCallback((v) => {
+    setReplicateModel(v);
+    persist({ replicateModel: v });
   }, [persist]);
 
   const checkStatus = useCallback(async () => {
@@ -69,18 +87,14 @@ export default function ImageGen({ onClose }) {
 
   useEffect(() => { if (backend === 'comfyui') checkStatus(); }, [backend, checkStatus]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const generate = useCallback(async () => {
     if (!prompt.trim() || busy) return;
     setBusy(true); setError(''); setResultUrl(null);
     let res;
     if (backend === 'hosted') {
       res = await window.zeus?.imagegenGenerateHosted({ prompt, size, apiKey });
+    } else if (backend === 'replicate') {
+      res = await window.zeus?.imagegenGenerateReplicate({ prompt, size, model: replicateModel, apiKey: replicateApiKey });
     } else {
       const [width, height] = size.split('x').map(Number);
       res = await window.zeus?.imagegenGenerate({
@@ -91,7 +105,7 @@ export default function ImageGen({ onClose }) {
     setBusy(false);
     if (res?.error) { setError(res.error); return; }
     setResultUrl(res.dataUrl);
-  }, [backend, prompt, negative, ckpt, steps, cfg, size, sampler, scheduler, seed, apiKey, busy]);
+  }, [backend, prompt, negative, ckpt, steps, cfg, size, sampler, scheduler, seed, apiKey, replicateModel, replicateApiKey, busy]);
 
   const editResult = useCallback(() => {
     setImageEditorSource(resultUrl);
@@ -106,53 +120,48 @@ export default function ImageGen({ onClose }) {
     if (res?.path) { setSavedMsg(`Saved → ${res.path}`); setTimeout(() => setSavedMsg(''), 4000); }
   }, [resultUrl]);
 
-  const ready = backend === 'hosted' ? !!apiKey : status.ok;
+  const ready = backend === 'hosted' ? !!apiKey : backend === 'replicate' ? !!replicateApiKey && !!replicateModel : status.ok;
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      className="absolute inset-0 z-[60] flex flex-col"
-      style={{ background: 'var(--c-bg)' }}
-    >
-      {/* Title bar */}
-      <div className="flex items-center gap-3 px-4 flex-shrink-0"
-        style={{ height: 40, borderBottom: '1px solid var(--c-border)', background: '#080c14' }}>
+    <FloatingPanel
+      id="image-gen" title="IMAGE GENERATOR" onClose={onClose}
+      defaultWidth={1040} defaultHeight={680}
+      icon={
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 2l2.5 6.5L21 11l-6.5 2.5L12 20l-2.5-6.5L3 11l6.5-2.5L12 2z" />
         </svg>
-        <span style={{ color: 'var(--c-accent)', fontSize: 11, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.12em' }}>
-          IMAGE GENERATOR
-        </span>
-        {backend === 'comfyui' ? (
-          status.checking ? (
-            <span style={{ color: 'var(--c-muted)', fontSize: 10 }}>checking ComfyUI…</span>
-          ) : status.ok ? (
-            <span style={{ color: 'var(--c-green)', fontSize: 10 }} className="flex items-center gap-1.5">
-              <span className="status-dot online" /> ComfyUI connected
+      }
+      headerExtra={
+        <>
+          {backend === 'comfyui' ? (
+            status.checking ? (
+              <span style={{ color: 'var(--c-muted)', fontSize: 10 }}>checking ComfyUI…</span>
+            ) : status.ok ? (
+              <span style={{ color: 'var(--c-green)', fontSize: 10 }} className="flex items-center gap-1.5">
+                <span className="status-dot online" /> ComfyUI connected
+              </span>
+            ) : (
+              <span style={{ color: 'var(--c-red)', fontSize: 10 }}>ComfyUI unreachable — start it, then retry</span>
+            )
+          ) : backend === 'replicate' ? (
+            <span style={{ color: replicateApiKey ? 'var(--c-green)' : 'var(--c-muted)', fontSize: 10 }}>
+              {replicateApiKey ? 'API key set' : 'Enter your Replicate API key below'}
             </span>
           ) : (
-            <span style={{ color: 'var(--c-red)', fontSize: 10 }}>ComfyUI unreachable — start it, then retry</span>
-          )
-        ) : (
-          <span style={{ color: apiKey ? 'var(--c-green)' : 'var(--c-muted)', fontSize: 10 }}>
-            {apiKey ? 'API key set' : 'Enter your OpenAI API key below'}
-          </span>
-        )}
-        {savedMsg && <span style={{ color: 'var(--c-green)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>{savedMsg}</span>}
-        <div className="flex-1" />
-        {backend === 'comfyui' && !status.ok && !status.checking && (
-          <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-accent)' }} onClick={checkStatus}>
-            RETRY
-          </button>
-        )}
-        <button className="btn-icon w-6 h-6" onClick={onClose} title="Close (Esc)">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
+            <span style={{ color: apiKey ? 'var(--c-green)' : 'var(--c-muted)', fontSize: 10 }}>
+              {apiKey ? 'API key set' : 'Enter your OpenAI API key below'}
+            </span>
+          )}
+          {savedMsg && <span style={{ color: 'var(--c-green)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>{savedMsg}</span>}
+          <div className="flex-1" />
+          {backend === 'comfyui' && !status.ok && !status.checking && (
+            <button className="btn-icon" style={{ fontSize: 10, padding: '3px 8px', color: 'var(--c-accent)' }} onClick={checkStatus}>
+              RETRY
+            </button>
+          )}
+        </>
+      }
+    >
       {/* Body */}
       <div className="flex-1 overflow-hidden flex">
         {/* Controls */}
@@ -161,7 +170,7 @@ export default function ImageGen({ onClose }) {
           <div>
             <label style={labelStyle}>BACKEND</label>
             <div className="flex gap-1.5">
-              {[['comfyui','Local (ComfyUI)'],['hosted','Hosted (API)']].map(([val, lbl]) => (
+              {[['comfyui','Local (ComfyUI)'],['hosted','OpenAI'],['replicate','Replicate']].map(([val, lbl]) => (
                 <button key={val} onClick={() => selectBackend(val)} style={{
                   flex: 1, padding: '6px 6px', fontSize: 10.5, borderRadius: 6,
                   background: backend === val ? 'var(--c-glow)' : 'var(--c-card)',
@@ -195,6 +204,35 @@ export default function ImageGen({ onClose }) {
             </div>
           )}
 
+          {backend === 'replicate' && (
+            <>
+              <div>
+                <label style={labelStyle}>REPLICATE API KEY</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    style={fieldStyle}
+                    placeholder="r8_..."
+                    value={replicateApiKey}
+                    onChange={e => onReplicateApiKeyChange(e.target.value)}
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <button className="btn-icon w-8 h-8 rounded-lg flex-shrink-0" style={{ border: '1px solid var(--c-border)', color: 'var(--c-muted)' }} onClick={() => setShowKey(v => !v)}>
+                    {showKey ? '🙈' : '👁'}
+                  </button>
+                </div>
+                <p style={{ color: 'var(--c-muted)', fontSize: 10, marginTop: 5, lineHeight: 1.5 }}>
+                  Get a key at replicate.com — billed per generation, hosts many open image models (Flux, SDXL, etc.).
+                </p>
+              </div>
+              <div>
+                <label style={labelStyle}>MODEL</label>
+                <input style={fieldStyle} placeholder="owner/model-name" value={replicateModel} onChange={e => onReplicateModelChange(e.target.value)} spellCheck={false} />
+              </div>
+            </>
+          )}
+
           <div>
             <label style={labelStyle}>PROMPT</label>
             <textarea rows={4} style={{ ...fieldStyle, resize: 'vertical' }} placeholder="A cinematic shot of…"
@@ -221,7 +259,7 @@ export default function ImageGen({ onClose }) {
           <div>
             <label style={labelStyle}>SIZE</label>
             <div className="flex gap-1.5 flex-wrap">
-              {(backend === 'hosted' ? HOSTED_SIZES : LOCAL_SIZES).map(([val, lbl]) => (
+              {(backend === 'comfyui' ? LOCAL_SIZES : HOSTED_SIZES).map(([val, lbl]) => (
                 <button key={val} onClick={() => setSize(val)} style={{
                   padding: '5px 8px', fontSize: 10, borderRadius: 6,
                   background: size === val ? 'var(--c-glow)' : 'var(--c-card)',
@@ -288,7 +326,9 @@ export default function ImageGen({ onClose }) {
           {busy ? (
             <div className="flex flex-col items-center gap-3">
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--c-accent)', animation: 'blink 1s infinite' }} />
-              <p style={{ color: 'var(--c-muted)', fontSize: 12 }}>{backend === 'hosted' ? 'Rendering with OpenAI…' : 'Rendering with ComfyUI…'}</p>
+              <p style={{ color: 'var(--c-muted)', fontSize: 12 }}>
+                {backend === 'hosted' ? 'Rendering with OpenAI…' : backend === 'replicate' ? 'Rendering with Replicate…' : 'Rendering with ComfyUI…'}
+              </p>
             </div>
           ) : resultUrl ? (
             <>
@@ -310,6 +350,6 @@ export default function ImageGen({ onClose }) {
           )}
         </div>
       </div>
-    </motion.div>
+    </FloatingPanel>
   );
 }

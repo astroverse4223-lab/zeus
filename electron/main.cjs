@@ -52,6 +52,7 @@ function getVault() {
 
 // ─── Plugins (skill packs) ──────────────────────────────────────────────────────
 const plugins = require('./plugins/index.cjs');
+const { registerContentFactory } = require('./content-factory.cjs');
 function getPluginsDir() { return path.join(app.getPath('userData'), 'plugins'); }
 // Cloud APIs reprocess a big injected skill-pack cheaply (and now benefit from Anthropic
 // prompt caching — see runAnthropic), but local Ollama models have to prefill the entire
@@ -124,6 +125,37 @@ const DEFAULT_SETTINGS = {
     height:    512,
     sampler:   'euler',
     scheduler: 'normal',
+    replicateModel: 'black-forest-labs/flux-schnell',
+  },
+  videoGen: {
+    baseURL:        'http://127.0.0.1:8188', // ComfyUI server (shared with imageGen by default)
+    steps:          20,
+    cfg:            6,
+    width:          512,
+    height:         512,
+    frames:         25,
+    fps:            8,
+    motionBucketId: 127,
+    augmentation:   0,
+    replicateModel: 'minimax/video-01',
+    clipName:       '', // T5 text encoder file for LTX-Video txt2vid (e.g. t5xxl_fp16.safetensors)
+  },
+  contentFactory: {
+    voiceName:  '',   // Windows SAPI voice (blank = default installed voice)
+    rate:       0,    // SAPI rate, -10..10
+    reddit: {
+      clientId:     '', // free "script" app at reddit.com/prefs/apps — needed since unauthenticated scraping is now blocked
+      clientSecret: '',
+    },
+    tiktok: {
+      clientKey:    '',
+      clientSecret: '',
+      accessToken:  '',
+      refreshToken: '',
+      expiresAt:    0,
+      openId:       '',
+    },
+    uploadQueue: [], // { id, videoPath, caption, privacyLevel, scheduledAt, status, error }
   },
   system: {
     shell:           'powershell',
@@ -168,6 +200,8 @@ function saveSettings(s) {
 }
 
 let settings = loadSettings();
+
+registerContentFactory({ ipcMain, app, shell, dialog, getSettings: () => settings, saveSettings, getMainWindow: () => mainWindow });
 
 // ─── Memory System ────────────────────────────────────────────────────────────
 
@@ -1020,6 +1054,7 @@ ipcMain.handle('zeus:imagegen-generate', async (event, params) => {
 
 // Image generation via a hosted API (OpenAI), for users who don't run ComfyUI locally.
 ipcMain.handle('zeus:imagegen-generate-hosted', async (_, { prompt, size, apiKey }) => {
+  apiKey = apiKey?.trim();
   if (!apiKey) return { error: 'Missing OpenAI API key' };
   try {
     const r = await fetch('https://api.openai.com/v1/images/generations', {
@@ -1032,6 +1067,242 @@ ipcMain.handle('zeus:imagegen-generate-hosted', async (_, { prompt, size, apiKey
     const b64 = json?.data?.[0]?.b64_json;
     if (!b64) return { error: 'OpenAI did not return image data' };
     return { dataUrl: `data:image/png;base64,${b64}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Image generation via Replicate, for users who'd rather use a Replicate-hosted
+// model than OpenAI's DALL·E 3 (e.g. SDXL, Flux, etc.).
+ipcMain.handle('zeus:imagegen-generate-replicate', async (_, { prompt, size, model, apiKey }) => {
+  apiKey = apiKey?.trim();
+  model = model?.trim();
+  if (!apiKey) return { error: 'Missing Replicate API key' };
+  if (!model) return { error: 'Missing Replicate model' };
+  try {
+    const [width, height] = (size || '1024x1024').split('x').map(Number);
+    const create = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ input: { prompt, width, height } }),
+    });
+    let prediction = await create.json().catch(() => ({}));
+    if (!create.ok) return { error: prediction?.detail || `Replicate returned ${create.status}` };
+
+    if (!prediction?.urls?.get) return { error: 'Replicate did not return a status URL for this prediction' };
+
+    const deadline = Date.now() + 180000;
+    while (!['succeeded', 'failed', 'canceled'].includes(prediction.status) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000));
+      const pr = await fetch(prediction.urls.get, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const next = await pr.json().catch(() => ({}));
+      if (!pr.ok) return { error: next?.detail || `Replicate status check failed (${pr.status})` };
+      prediction = next;
+    }
+    if (prediction.status !== 'succeeded') return { error: prediction.error || `Replicate job ${prediction.status || 'timed out'}` };
+
+    const out = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+    if (!out) return { error: 'Replicate did not return output' };
+    const ir = await fetch(out);
+    const buf = Buffer.from(await ir.arrayBuffer());
+    const mime = ir.headers.get('content-type') || 'image/png';
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ── Video generation via local ComfyUI (Stable Video Diffusion / LTX-Video) ──
+function videoComfyBase() {
+  return (settings?.videoGen?.baseURL || 'http://127.0.0.1:8188').replace(/\/$/, '');
+}
+
+ipcMain.handle('zeus:videogen-status', async () => {
+  try {
+    const base = videoComfyBase();
+    const r = await fetch(`${base}/object_info`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return { ok: false, error: `ComfyUI returned ${r.status}` };
+    const info = await r.json();
+    const checkpoints = info?.ImageOnlyCheckpointLoader?.input?.required?.ckpt_name?.[0] || [];
+    const txt2vidCheckpoints = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [];
+    const clipNames = info?.CLIPLoader?.input?.required?.clip_name?.[0] || [];
+    return {
+      ok: true,
+      checkpoints,
+      txt2vidCheckpoints,
+      clipNames,
+      img2vidSupported: !!info?.SVD_img2vid_Conditioning,
+      txt2vidSupported: !!info?.LTXVConditioning,
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+async function comfyUploadImage(base, dataUrl) {
+  const m = /^data:(.+);base64,(.+)$/.exec(dataUrl || '');
+  if (!m) throw new Error('Invalid source image');
+  const buf = Buffer.from(m[2], 'base64');
+  const ext = (m[1].split('/')[1] || 'png').replace('jpeg', 'jpg');
+  const form = new FormData();
+  form.append('image', new Blob([buf], { type: m[1] }), `zeus-${Date.now()}.${ext}`);
+  const r = await fetch(`${base}/upload/image`, { method: 'POST', body: form });
+  if (!r.ok) throw new Error(`ComfyUI image upload failed (${r.status})`);
+  const json = await r.json();
+  return json.name;
+}
+
+function buildSVDWorkflow({ image, ckpt, width, height, frames, motionBucketId, fps, augmentation, minCfg, steps, cfg, sampler, scheduler, seed }) {
+  return {
+    '1': { class_type: 'ImageOnlyCheckpointLoader', inputs: { ckpt_name: ckpt } },
+    '2': { class_type: 'LoadImage', inputs: { image } },
+    '3': { class_type: 'SVD_img2vid_Conditioning', inputs: {
+      clip_vision: ['1', 1], init_image: ['2', 0], vae: ['1', 2],
+      width, height, video_frames: frames, motion_bucket_id: motionBucketId, fps, augmentation_level: augmentation,
+    } },
+    '4': { class_type: 'VideoLinearCFGGuidance', inputs: { model: ['1', 0], min_cfg: minCfg } },
+    '5': { class_type: 'KSampler', inputs: {
+      seed, steps, cfg, sampler_name: sampler, scheduler, denoise: 1,
+      model: ['4', 0], positive: ['3', 0], negative: ['3', 1], latent_image: ['3', 2],
+    } },
+    '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+    '7': { class_type: 'SaveAnimatedWEBP', inputs: { images: ['6', 0], filename_prefix: 'zeus_vid', fps, lossless: false, quality: 90, method: 'default' } },
+  };
+}
+
+function buildLTXVWorkflow({ prompt, negative, ckpt, clipName, width, height, frames, fps, steps, cfg, seed }) {
+  return {
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+    '9': { class_type: 'CLIPLoader', inputs: { clip_name: clipName, type: 'ltxv' } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['9', 0] } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { text: negative || '', clip: ['9', 0] } },
+    '4': { class_type: 'EmptyLTXVLatentVideo', inputs: { width, height, length: frames, batch_size: 1 } },
+    '5': { class_type: 'LTXVConditioning', inputs: { positive: ['2', 0], negative: ['3', 0], frame_rate: fps } },
+    '6': { class_type: 'KSampler', inputs: {
+      seed, steps, cfg, sampler_name: 'euler', scheduler: 'normal', denoise: 1,
+      model: ['1', 0], positive: ['5', 0], negative: ['5', 1], latent_image: ['4', 0],
+    } },
+    '7': { class_type: 'VAEDecodeTiled', inputs: {
+      samples: ['6', 0], vae: ['1', 2], tile_size: 512, overlap: 64, temporal_size: 64, temporal_overlap: 8,
+    } },
+    '8': { class_type: 'SaveAnimatedWEBP', inputs: { images: ['7', 0], filename_prefix: 'zeus_vid', fps, lossless: false, quality: 90, method: 'default' } },
+  };
+}
+
+async function runComfyWorkflow(base, workflow, outputNode) {
+  const clientId = 'zeus-' + Date.now();
+  const post = await fetch(`${base}/prompt`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+  });
+  if (!post.ok) return { error: `ComfyUI rejected the job (${post.status}): ${(await post.text()).slice(0, 200)}` };
+  const { prompt_id } = await post.json();
+  if (!prompt_id) return { error: 'ComfyUI did not return a prompt id' };
+
+  const deadline = Date.now() + 300000; // video jobs run longer than stills
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1500));
+    const hr = await fetch(`${base}/history/${prompt_id}`);
+    if (!hr.ok) continue;
+    const hist = await hr.json();
+    const entry = hist?.[prompt_id];
+    if (!entry) continue;
+    const images = entry.outputs?.[outputNode]?.images;
+    if (images?.length) {
+      const out = images[0];
+      const q = new URLSearchParams({ filename: out.filename, subfolder: out.subfolder || '', type: out.type || 'output' });
+      const ir = await fetch(`${base}/view?${q}`);
+      if (!ir.ok) return { error: `Failed to fetch generated video (${ir.status})` };
+      const buf = Buffer.from(await ir.arrayBuffer());
+      return { dataUrl: `data:image/webp;base64,${buf.toString('base64')}` };
+    }
+    if (entry.status?.status_str === 'error') return { error: 'ComfyUI workflow error — check the ComfyUI console.' };
+  }
+  return { error: 'Timed out waiting for ComfyUI (5 min).' };
+}
+
+ipcMain.handle('zeus:videogen-generate', async (_, params) => {
+  const base = videoComfyBase();
+  const cfg = settings?.videoGen || {};
+  try {
+    if (params.mode === 'img2vid') {
+      const filename = await comfyUploadImage(base, params.sourceImage);
+      const workflow = buildSVDWorkflow({
+        image: filename, ckpt: params.ckpt,
+        width: params.width ?? cfg.width ?? 512, height: params.height ?? cfg.height ?? 512,
+        frames: params.frames ?? cfg.frames ?? 25, fps: params.fps ?? cfg.fps ?? 8,
+        motionBucketId: params.motionBucketId ?? cfg.motionBucketId ?? 127,
+        augmentation: params.augmentation ?? cfg.augmentation ?? 0,
+        minCfg: 1, steps: params.steps ?? cfg.steps ?? 20, cfg: params.cfg ?? cfg.cfg ?? 6,
+        sampler: 'euler', scheduler: 'karras',
+        seed: params.seed ?? Math.floor(Math.random() * 1e15),
+      });
+      return await runComfyWorkflow(base, workflow, '7');
+    } else {
+      const workflow = buildLTXVWorkflow({
+        prompt: params.prompt, negative: params.negative, ckpt: params.ckpt, clipName: params.clipName,
+        width: params.width ?? cfg.width ?? 512, height: params.height ?? cfg.height ?? 512,
+        frames: params.frames ?? cfg.frames ?? 25, fps: params.fps ?? cfg.fps ?? 8,
+        steps: params.steps ?? cfg.steps ?? 20, cfg: params.cfg ?? cfg.cfg ?? 6,
+        seed: params.seed ?? Math.floor(Math.random() * 1e15),
+      });
+      return await runComfyWorkflow(base, workflow, '8');
+    }
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Video generation via a hosted API (Replicate), for users who don't run ComfyUI locally.
+ipcMain.handle('zeus:videogen-generate-hosted', async (_, { prompt, sourceImage, model, apiKey }) => {
+  apiKey = apiKey?.trim();
+  model = model?.trim();
+  if (!apiKey) return { error: 'Missing Replicate API key' };
+  if (!model) return { error: 'Missing Replicate model' };
+  try {
+    const input = sourceImage ? { prompt, image: sourceImage, first_frame_image: sourceImage } : { prompt };
+    const create = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ input }),
+    });
+    let prediction = await create.json().catch(() => ({}));
+    if (!create.ok) return { error: prediction?.detail || `Replicate returned ${create.status}` };
+    if (!prediction?.urls?.get) return { error: 'Replicate did not return a status URL for this prediction' };
+
+    const deadline = Date.now() + 300000;
+    while (!['succeeded', 'failed', 'canceled'].includes(prediction.status) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2500));
+      const pr = await fetch(prediction.urls.get, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const next = await pr.json().catch(() => ({}));
+      if (!pr.ok) return { error: next?.detail || `Replicate status check failed (${pr.status})` };
+      prediction = next;
+    }
+    if (prediction.status !== 'succeeded') return { error: prediction.error || `Replicate job ${prediction.status || 'timed out'}` };
+
+    const out = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+    if (!out) return { error: 'Replicate did not return output' };
+    const vr = await fetch(out);
+    const buf = Buffer.from(await vr.arrayBuffer());
+    const mime = vr.headers.get('content-type') || 'video/mp4';
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('zeus:videogen-save', async (_, { dataUrl, defaultName }) => {
+  try {
+    const ext = /^data:video\/mp4/.test(dataUrl) ? 'mp4' : /^data:video\//.test(dataUrl) ? 'webm' : 'webp';
+    const res = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save video',
+      defaultPath: defaultName || `zeus-generated.${ext}`,
+      filters: [{ name: 'Video', extensions: ['mp4', 'webm', 'webp'] }],
+    });
+    if (res.canceled || !res.filePath) return { canceled: true };
+    const base64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
+    fs.writeFileSync(res.filePath, Buffer.from(base64, 'base64'));
+    return { path: res.filePath };
   } catch (err) {
     return { error: err.message };
   }

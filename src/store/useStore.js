@@ -144,12 +144,59 @@ const useStore = create(
       imageGenOpen: false,
       setImageGenOpen(v) { set({ imageGenOpen: v }); },
 
+      videoGenOpen: false,
+      setVideoGenOpen(v) { set({ videoGenOpen: v }); },
+
+      contentFactoryOpen: false,
+      setContentFactoryOpen(v) { set({ contentFactoryOpen: v }); },
+
+      // One-shot handoff: Content Factory writes a generated prompt here, then opens
+      // Image/Video Gen, which reads it once on mount and clears it.
+      genPromptPrefill: null,
+      setGenPromptPrefill(v) { set({ genPromptPrefill: v }); },
+
+      // ── Floating panel registry ────────────────────────────────────────────────
+      // Every panel (Image Gen, Notepad, Code Editor, etc.) renders inside a shared
+      // FloatingPanel chrome. Minimized state lives here (not in the panel's own
+      // local state) so a dock rendered elsewhere in the tree can restore it, and
+      // z-index lives here so clicking any panel brings it in front of the others.
+      floatingPanels: {}, // { [id]: { title, minimized, z } }
+      _nextPanelZ: 100,
+      registerFloatingPanel(id, title) {
+        set(s => ({
+          floatingPanels: { ...s.floatingPanels, [id]: { title, minimized: false, z: s._nextPanelZ } },
+          _nextPanelZ: s._nextPanelZ + 1,
+        }));
+      },
+      unregisterFloatingPanel(id) {
+        set(s => {
+          const next = { ...s.floatingPanels };
+          delete next[id];
+          return { floatingPanels: next };
+        });
+      },
+      setPanelMinimized(id, v) {
+        set(s => ({
+          floatingPanels: { ...s.floatingPanels, [id]: { ...(s.floatingPanels[id] || {}), minimized: v } },
+        }));
+      },
+      bringPanelToFront(id) {
+        set(s => ({
+          floatingPanels: { ...s.floatingPanels, [id]: { ...(s.floatingPanels[id] || {}), z: s._nextPanelZ } },
+          _nextPanelZ: s._nextPanelZ + 1,
+        }));
+      },
+
       vaultOpen: false,
       setVaultOpen(v) { set({ vaultOpen: v }); },
 
       // ── Hidden Snake easter egg ───────────────────────────────────────────────
       snakeOpen: false,
       setSnakeOpen(v) { set({ snakeOpen: v }); },
+
+      // ── Arcade ───────────────────────────────────────────────────────────────
+      arcadeOpen: false,
+      setArcadeOpen(v) { set({ arcadeOpen: v }); },
 
       // ── Notepad ────────────────────────────────────────────────────────────────
       notepadOpen: false,

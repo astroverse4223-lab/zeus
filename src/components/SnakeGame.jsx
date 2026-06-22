@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import useStore from '../store/useStore.js';
+import FloatingPanel from './FloatingPanel.jsx';
 
 const COLS = 24;
 const ROWS = 18;
@@ -24,6 +25,7 @@ const KEY_DIRS = {
 // Hidden Konami-code easter egg — a theme-aware Snake game rendered with whatever
 // neon palette is currently active, so it never looks out of place no matter the theme.
 export default function SnakeGame({ onClose }) {
+  const assistantName = useStore(s => (s.settings?.assistantName || 'ZEUS').toUpperCase());
   const canvasRef = useRef(null);
   const stateRef = useRef(null);
   const [score, setScore] = useState(0);
@@ -137,20 +139,20 @@ export default function SnakeGame({ onClose }) {
   }, [gameOver, best]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[100] flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)' }}
-    >
-      <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center justify-between" style={{ width: COLS * CELL }}>
-          <span style={{ color: 'var(--c-accent)', fontFamily: 'Orbitron, sans-serif', fontSize: 12, letterSpacing: '0.12em' }}>
-            ⚡ ZEUS SNAKE
-          </span>
+    <FloatingPanel
+      id="snake-game" title={`${assistantName} SNAKE`} onClose={onClose} resizable={false}
+      defaultWidth={COLS * CELL + 40} defaultHeight={ROWS * CELL + 120}
+      icon={<span style={{ fontSize: 14 }}>⚡</span>}
+      headerExtra={
+        <>
           <span style={{ color: 'var(--c-muted)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
             SCORE {score} · BEST {best}
           </span>
-        </div>
+          <div className="flex-1" />
+        </>
+      }
+    >
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-3">
         <div style={{ position: 'relative', border: '1px solid var(--c-border-hi)', boxShadow: '0 0 40px var(--c-glow)', lineHeight: 0 }}>
           <canvas ref={canvasRef} width={COLS * CELL} height={ROWS * CELL} />
           {gameOver && (
@@ -164,6 +166,6 @@ export default function SnakeGame({ onClose }) {
           Arrows / WASD to move · Esc to exit
         </span>
       </div>
-    </motion.div>
+    </FloatingPanel>
   );
 }

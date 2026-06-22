@@ -17,13 +17,25 @@ export default function MatrixRainBackground() {
     if (!active) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    const fontSize = 16;
+    let drops = [];
+
+    // Resizing the canvas resets its pixel buffer, but the rain columns also need
+    // to grow/shrink to match — otherwise widening the window (e.g. fullscreening
+    // on an ultrawide) leaves newly-exposed columns permanently blank until the
+    // effect remounts (which is why toggling the setting off/on "fixed" it).
+    const resize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      const cols = Math.ceil(canvas.width / fontSize);
+      if (cols > drops.length) {
+        for (let i = drops.length; i < cols; i++) drops.push(Math.random() * -50);
+      } else {
+        drops.length = cols;
+      }
+    };
     resize();
     window.addEventListener('resize', resize);
-
-    const fontSize = 16;
-    const cols = Math.ceil(canvas.width / fontSize);
-    const drops = new Array(cols).fill(0).map(() => Math.random() * -50);
 
     const draw = () => {
       ctx.fillStyle = 'rgba(0,0,0,0.08)';

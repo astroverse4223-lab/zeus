@@ -86,6 +86,30 @@ contextBridge.exposeInMainWorld('zeus', {
   imagegenStatus:   ()       => ipcRenderer.invoke('zeus:imagegen-status'),
   imagegenGenerate: (params) => ipcRenderer.invoke('zeus:imagegen-generate', params),
   imagegenGenerateHosted: (params) => ipcRenderer.invoke('zeus:imagegen-generate-hosted', params),
+  imagegenGenerateReplicate: (params) => ipcRenderer.invoke('zeus:imagegen-generate-replicate', params),
+
+  // Video generation (ComfyUI / Replicate)
+  videogenStatus:   ()       => ipcRenderer.invoke('zeus:videogen-status'),
+  videogenGenerate: (params) => ipcRenderer.invoke('zeus:videogen-generate', params),
+  videogenGenerateHosted: (params) => ipcRenderer.invoke('zeus:videogen-generate-hosted', params),
+  videogenSave: (dataUrl, defaultName) => ipcRenderer.invoke('zeus:videogen-save', { dataUrl, defaultName }),
+
+  // Content Factory: niche → trending topic → script → voice → subtitles → MP4 → TikTok
+  cfTrending:    (niche, source) => ipcRenderer.invoke('zeus:contentfactory-trending', { niche, source }),
+  cfScript:      (params) => ipcRenderer.invoke('zeus:contentfactory-script', params),
+  cfVideoPrompt: (params) => ipcRenderer.invoke('zeus:contentfactory-video-prompt', params),
+  cfVoices:      ()       => ipcRenderer.invoke('zeus:contentfactory-voices'),
+  cfVoice:       (params) => ipcRenderer.invoke('zeus:contentfactory-voice', params),
+  cfSaveVoice:   (dataUrl, defaultName) => ipcRenderer.invoke('zeus:contentfactory-save-voice', { dataUrl, defaultName }),
+  cfSubtitles:   (params) => ipcRenderer.invoke('zeus:contentfactory-subtitles', params),
+  cfExport:      (params) => ipcRenderer.invoke('zeus:contentfactory-export', params),
+  tiktokRedirectUri: ()       => ipcRenderer.invoke('zeus:tiktok-redirect-uri'),
+  tiktokConnect:     (params) => ipcRenderer.invoke('zeus:tiktok-connect', params),
+  tiktokStatus:      ()       => ipcRenderer.invoke('zeus:tiktok-status'),
+  tiktokDisconnect:  ()       => ipcRenderer.invoke('zeus:tiktok-disconnect'),
+  tiktokSchedule:    (params) => ipcRenderer.invoke('zeus:tiktok-schedule', params),
+  tiktokQueue:       ()       => ipcRenderer.invoke('zeus:tiktok-queue'),
+  tiktokCancel:      (id)     => ipcRenderer.invoke('zeus:tiktok-cancel', id),
 
   // Embedded terminal
   terminalExec: (cmd) => ipcRenderer.invoke('zeus:terminal-exec', { command: cmd }),
